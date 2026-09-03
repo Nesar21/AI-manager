@@ -1,0 +1,648 @@
+name: Check Toolnames in Issue
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+jobs:
+  # Checks each tool name in the issue body against src/toolNames.json on main
+  # and posts a comment with the status of each one.
+  # Trigger: label "Toolnames checkup"
+  check-toolnames:
+    runs-on: ubuntu-latest
+    if: github.event.label.name == 'Toolnames checkup'
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout main branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - name: Validate issue body for hidden content
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TEXT: ${{ github.event.issue.body }}
+          ITEM_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          CONTEXT_TYPE: issue
+          FINDINGS_FILE: /tmp/validation-findings.txt
+        run: bash .github/workflows/validate-input.sh
+
+      - name: Check toolnames and post comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          echo "=== Checking toolnames and building comment ==="
+          
+          python3 - << 'PYEOF'
+          import json
+          import os
+          import re
+          import sys
+          
+          sys.path.insert(0, ".github/scripts")
+          from toolnames_utils import find_matches_for_new_tool
+          
+          issue_body = os.environ.get("ISSUE_BODY", "")
+          issue_number = os.environ.get("ISSUE_NUMBER", "")
+          repo = os.environ.get("REPO", "")
+          run_id = os.environ.get("RUN_ID", "")
+          server_url = os.environ.get("SERVER_URL", "https://github.com")
+          
+          COMMENT_FILE = "/tmp/toolnames-comment.md"
+          MAX_BODY_LEN = 100_000  # guard against extremely large issue bodies
+          
+          # Truncate untrusted input to prevent resource exhaustion
+          if len(issue_body) > MAX_BODY_LEN:
+              issue_body = issue_body[:MAX_BODY_LEN]
+              print("Warning: issue body was truncated to 100 KB", file=sys.stderr)
+          
+          # Extract backtick-wrapped strings and filter to plausible tool-name shapes
+          # (no path separators or spaces; reasonable length).  This avoids matching
+          # inline-code snippets like `src/toolNames.json` or prose code examples.
+          raw_matches = re.findall(r'`([^`\n]+)`', issue_body)
+          tools = sorted(set(
+              m for m in raw_matches
+              if "/" not in m and " " not in m and len(m) <= 128
+          ))
+          print(f"Found {len(tools)} candidate tool name(s): {tools}", file=sys.stderr)
+          
+          if not tools:
+              print("No candidate tool names found in issue body. Skipping.", file=sys.stderr)
+              with open(COMMENT_FILE, "w") as f:
+                  f.write("## 🔍 Toolnames Checkup\n\n_No candidate tool names (backtick-wrapped identifiers without path separators) were found in the issue body._\n")
+          else:
+              with open("src/toolNames.json", "r") as f:
+                  known_tools = json.load(f)
+          
+              already_added = []
+              needs_adding = []
+              case_variants = []
+              canonical_equivalents = []
+              family_equivalents = []
+
+              for tool in tools:
+                  matches = find_matches_for_new_tool(tool, known_tools)
+                  if matches["exact"]:
+                      already_added.append((tool, known_tools[tool]))
+                  elif matches["case_variant"]:
+                      existing_id, friendly = matches["case_variant"][0]
+                      case_variants.append((tool, existing_id, friendly))
+                  elif matches["canonical_equivalent"]:
+                      existing_id, friendly = matches["canonical_equivalent"][0]
+                      canonical_equivalents.append((tool, existing_id, friendly))
+                  elif matches["family_equivalent"]:
+                      _, friendly = matches["family_equivalent"][0]
+                      family_equivalents.append((tool, friendly))
+                  else:
+                      needs_adding.append(tool)
+          
+              lines = ["## 🔍 Toolnames Checkup", ""]
+              lines.append("Checked the tool names in this issue against `src/toolNames.json` on the `main` branch:")
+              lines.append("")
+          
+              if already_added:
+                  lines.append("### ✅ Already mapped")
+                  lines.append("")
+                  lines.append("| Tool Name | Friendly Name |")
+                  lines.append("| --- | --- |")
+                  for tool, friendly in already_added:
+                      lines.append(f"| `{tool}` | {friendly} |")
+                  lines.append("")
+          
+              if case_variants:
+                  lines.append("### ⚠️ Case variant of an existing entry — do not add")
+                  lines.append("")
+                  lines.append("These tool names differ only in capitalisation from an entry that is already mapped.")
+                  lines.append("**Do not add a separate entry** — the existing lowercase form covers this tool.")
+                  lines.append("")
+                  lines.append("| Tool Name (from issue) | Existing Entry | Friendly Name |")
+                  lines.append("| --- | --- | --- |")
+                  for tool, existing, friendly in case_variants:
+                      lines.append(f"| `{tool}` | `{existing}` | {friendly} |")
+                  lines.append("")
+          
+              if canonical_equivalents:
+                  lines.append("### ⚠️ Equivalent to an existing entry — do not add")
+                  lines.append("")
+                  lines.append("These tool names normalize to the same canonical form as an existing entry (e.g. different MCP server registration or separator style).")
+                  lines.append("**Do not add a separate entry** — the existing entry covers this tool.")
+                  lines.append("")
+                  lines.append("| Tool Name (from issue) | Existing Entry | Friendly Name |")
+                  lines.append("| --- | --- | --- |")
+                  for tool, existing, friendly in canonical_equivalents:
+                      lines.append(f"| `{tool}` | `{existing}` | {friendly} |")
+                  lines.append("")
+
+              if family_equivalents:
+                  lines.append("### ⚠️ Recognized MCP tool under a new server registration — do not add")
+                  lines.append("")
+                  lines.append(
+                      "These aren't in `toolNames.json` yet, but they match a known MCP tool "
+                      "family (GitHub/Playwright/Context7/Tavily/Claude Browser) by action name — "
+                      "just registered under a different server id (e.g. a different MCP client or "
+                      "user config). The extension already resolves these to a friendly name at "
+                      "runtime and excludes them from \"unknown tools\" reports."
+                  )
+                  lines.append("**Do not add a separate entry.**")
+                  lines.append("")
+                  lines.append("| Tool Name (from issue) | Resolved Friendly Name |")
+                  lines.append("| --- | --- |")
+                  for tool, friendly in family_equivalents:
+                      lines.append(f"| `{tool}` | {friendly} |")
+                  lines.append("")
+
+              if needs_adding:
+                  lines.append("### ❌ Not yet in `toolNames.json`")
+                  lines.append("")
+                  lines.append("| Tool Name |")
+                  lines.append("| --- |")
+                  for tool in needs_adding:
+                      lines.append(f"| `{tool}` |")
+                  lines.append("")
+          
+              has_issues = case_variants or canonical_equivalents or family_equivalents
+              if already_added and not needs_adding and not has_issues:
+                  lines.append("> **All tool names in this issue are already mapped.** This issue may be a duplicate — consider closing it.")
+              elif has_issues and not needs_adding:
+                  lines.append("> **All unmapped tool names are variants of existing entries.** No new entries should be added. Consider closing this issue.")
+              elif needs_adding:
+                  lines.append(f"> **{len(needs_adding)} tool name(s) still need to be added.** Please use the `tool-names` custom agent or update `src/toolNames.json` manually.")
+          
+              lines.append("")
+              lines.append(f"_Workflow run: {server_url}/{repo}/actions/runs/{run_id}_")
+          
+              comment_body = "\n".join(lines)
+              with open(COMMENT_FILE, "w") as f:
+                  f.write(comment_body)
+              print("=== Comment preview ===", file=sys.stderr)
+              print(comment_body, file=sys.stderr)
+          PYEOF
+          
+          echo "=== Posting comment to issue #${ISSUE_NUMBER} ==="
+          gh issue comment "$ISSUE_NUMBER" \
+              --repo "$REPO" \
+              --body-file /tmp/toolnames-comment.md
+          
+          echo "✅ Comment posted successfully"
+
+  # Uses a local SLM (Qwen2.5-1.5B via Ollama) to generate friendly names for
+  # tool IDs that are missing from toolNames.json, then opens a PR with the
+  # new entries. The model is cached between runs to avoid re-downloading.
+  # Trigger: label "add-toolnames"
+  add-toolnames-with-slm:
+    runs-on: ubuntu-latest
+    if: github.event.label.name == 'add-toolnames'
+    permissions:
+      issues: write
+      contents: write
+      pull-requests: write
+    services:
+      ollama:
+        image: ollama/ollama:0.23.4
+        ports:
+          - 11434:11434
+        volumes:
+          - /home/runner/.ollama:/root/.ollama
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout main branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate issue body for hidden content
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TEXT: ${{ github.event.issue.body }}
+          ITEM_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          CONTEXT_TYPE: issue
+          FINDINGS_FILE: /tmp/validation-findings.txt
+        run: bash .github/workflows/validate-input.sh
+
+      - name: Extract missing tool names
+        id: extract
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          python3 - << 'PYEOF'
+          import json, os, re, sys
+
+          sys.path.insert(0, ".github/scripts")
+          from toolnames_utils import find_matches_for_new_tool
+
+          issue_body = os.environ.get("ISSUE_BODY", "")
+          MAX_BODY_LEN = 100_000
+          if len(issue_body) > MAX_BODY_LEN:
+              issue_body = issue_body[:MAX_BODY_LEN]
+              print("Warning: issue body truncated", file=sys.stderr)
+
+          # Extract backtick-wrapped strings; apply strict allowlist to prevent
+          # any user-controlled text from being forwarded raw to the model.
+          # Only accept characters valid in tool identifiers.
+          raw_matches = re.findall(r'`([^`\n]+)`', issue_body)
+          TOOL_ID_RE = re.compile(r'^[a-zA-Z0-9_.:\-]{1,128}$')
+          tools = sorted(set(
+              m for m in raw_matches
+              if TOOL_ID_RE.match(m)
+          ))
+          print(f"Candidate tools: {tools}", file=sys.stderr)
+
+          with open("src/toolNames.json") as f:
+              known_tools = json.load(f)
+
+          missing = []
+          for tool in tools:
+              matches = find_matches_for_new_tool(tool, known_tools)
+              if not (
+                  matches["exact"] or matches["case_variant"]
+                  or matches["canonical_equivalent"] or matches["family_equivalent"]
+              ):
+                  missing.append(tool)
+              elif matches["canonical_equivalent"]:
+                  existing_id, friendly = matches["canonical_equivalent"][0]
+                  print(
+                      f"Skipping {tool!r} — canonical equivalent of {existing_id!r} ({friendly})",
+                      file=sys.stderr
+                  )
+              elif matches["family_equivalent"]:
+                  _, friendly = matches["family_equivalent"][0]
+                  print(
+                      f"Skipping {tool!r} — resolves via known MCP family pattern ({friendly})",
+                      file=sys.stderr
+                  )
+
+          print(f"Missing tools: {missing}", file=sys.stderr)
+          with open("/tmp/missing-tools.json", "w") as f:
+              json.dump(missing, f)
+
+          has_missing = "true" if missing else "false"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"has_missing={has_missing}\n")
+              f.write(f"missing_count={len(missing)}\n")
+          PYEOF
+
+      - name: Cache Ollama models
+        if: steps.extract.outputs.has_missing == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.ollama/models
+          key: ollama-${{ runner.os }}-qwen2.5-1.5b-v1
+          restore-keys: ollama-${{ runner.os }}-qwen2.5-1.5b-
+
+      - name: Ensure Ollama model is available
+        if: steps.extract.outputs.has_missing == 'true'
+        run: |
+          echo "Waiting for Ollama service to be ready..."
+          for i in {1..30}; do
+            if curl -fsS http://localhost:11434/api/tags >/dev/null 2>&1; then
+              echo "Ollama is ready (attempt $i)"
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:11434/api/tags >/dev/null
+          OLLAMA_TAGS=$(curl -fsS http://localhost:11434/api/tags)
+          if echo "$OLLAMA_TAGS" | \
+              python3 -c "import json,sys; d=json.load(sys.stdin); exit(0 if any('qwen2.5:1.5b' in m['name'] for m in d.get('models',[])) else 1)" \
+              2>/dev/null; then
+            echo "Model qwen2.5:1.5b already available in cache"
+          else
+            echo "Pulling qwen2.5:1.5b model..."
+            curl -X POST http://localhost:11434/api/pull \
+              -H "Content-Type: application/json" \
+              -d '{"name":"qwen2.5:1.5b","stream":false}' \
+              --max-time 600
+          fi
+
+      - name: Generate friendly names with SLM
+        if: steps.extract.outputs.has_missing == 'true'
+        env:
+          TOOLNAMES_JSON: src/toolNames.json
+        run: |
+          python3 - << 'PYEOF'
+          import json, re, sys, urllib.request, urllib.error, os
+
+          with open("/tmp/missing-tools.json") as f:
+              missing_tools = json.load(f)
+
+          with open(os.environ["TOOLNAMES_JSON"]) as f:
+              known_tools = json.load(f)
+
+          # Build a representative sample of existing mappings for context.
+          # Only use data from the known-good JSON file, never from the issue body.
+          sample_entries = {}
+          mcp_local, mcp_remote, plain = 0, 0, 0
+          for k, v in known_tools.items():
+              if k == "unknown":
+                  continue
+              if "mcp_io_github_git_" in k and mcp_local < 3:
+                  sample_entries[k] = v; mcp_local += 1
+              elif "mcp_github_github_" in k and mcp_remote < 2:
+                  sample_entries[k] = v; mcp_remote += 1
+              elif not k.startswith("mcp") and plain < 4:
+                  sample_entries[k] = v; plain += 1
+              if mcp_local >= 3 and mcp_remote >= 2 and plain >= 4:
+                  break
+
+          sample_lines = "\n".join(
+              f'{json.dumps(k)} -> {json.dumps(v)}'
+              for k, v in sample_entries.items()
+          )
+          tool_ids_json = json.dumps(missing_tools, indent=2)
+
+          prompt = "\n".join([
+              "Convert each tool ID in the INPUT array to a friendly display name.",
+              "",
+              "RULES:",
+              "- Replace _, -, . with spaces; split camelCase (readFile -> read File)",
+              "- Title Case all words",
+              "- Keep ALL CAPS: MCP, GITHUB, API, URL, JSON, HTTP, HTTPS, CLI, UI, IO, ID, VSCODE",
+              "- MCP prefix mappings (strip prefix, format action, combine):",
+              '  mcp_io_github_git_ -> "GitHub MCP (Local): <action>"',
+              '  mcp_github_github_ -> "GitHub MCP (Remote): <action>"',
+              '  mcp_microsoft_pla_ -> "Playwright MCP: <action>"',
+              '  mcp_oraios_serena_ -> "Serena: <action>"',
+              '  mcp_gitkraken_ -> "GitKraken MCP: <action>"',
+              '  mcp_io_github_ups_ -> "Context7 MCP: <action>"',
+              '  mcp_microsoftdocs_microsoft_ -> "Microsoft Docs MCP: <action>"',
+              '  mcp_github_mcp_se_ -> "GitHub MCP: <action>"',
+              '  github-mcp-server- -> "GitHub MCP: <action>"',
+              '  context7- or mcp_context7<digits>_ -> "Context7 MCP: <action>"',
+              '  atlassian- -> "Atlassian MCP: <action>"',
+              '  mcp_home-assistan_ -> "Home Assistant MCP: <action>"',
+              '  mcp__microsoft_playwright-mcp__ -> "Playwright MCP: <action>"',
+              "  other mcp_ prefix -> derive server name from identifier;",
+              "  VS Code IDs look like mcp_<server>_<tool> where <server> is the",
+              "  user-configured server name TRUNCATED TO 13 CHARS (home-assistan =",
+              "  home-assistant). Copilot CLI IDs look like <full-server-name>-<tool>.",
+              "  Claude Code IDs look like mcp__<server>__<tool>.",
+              "- Tool IDs without any MCP prefix: just Title Case the words.",
+              '- Never output placeholder text like "Tool Name Not Found" or "Unknown".',
+              "",
+              "EXISTING MAPPINGS (follow these patterns):",
+              sample_lines,
+              "",
+              "INPUT:",
+              tool_ids_json,
+              "",
+              "OUTPUT: JSON object only, no explanation.",
+          ])
+
+          payload = {
+              "model": "qwen2.5:1.5b",
+              "prompt": prompt,
+              "format": "json",
+              "stream": False,
+              "options": {"temperature": 0, "seed": 42}
+          }
+
+          print("=== Calling Ollama API ===", file=sys.stderr)
+          req = urllib.request.Request(
+              "http://localhost:11434/api/generate",
+              data=json.dumps(payload).encode(),
+              headers={"Content-Type": "application/json"}
+          )
+
+          try:
+              with urllib.request.urlopen(req, timeout=180) as resp:
+                  data = json.loads(resp.read())
+              raw_response = data.get("response", "{}")
+              print(f"=== SLM response ===\n{raw_response}", file=sys.stderr)
+
+              try:
+                  generated = json.loads(raw_response)
+              except json.JSONDecodeError:
+                  m = re.search(r'\{[^{}]*\}', raw_response, re.DOTALL)
+                  generated = json.loads(m.group(0)) if m else {}
+
+              # Only keep entries for the tool IDs we asked about; sanitize values.
+              PLACEHOLDERS = {"tool name not found", "unknown", "not found", "n/a", "none", "unknown tool"}
+              validated = {}
+              for tool in missing_tools:
+                  friendly = str(generated.get(tool, "")).strip()
+                  if not friendly or len(friendly) > 200 or friendly.lower() in PLACEHOLDERS:
+                      # Local fallback transformation
+                      s = re.sub(r'[_\-.]', ' ', tool)
+                      s = re.sub(r'([a-z])([A-Z])', r'\1 \2', s)
+                      friendly = s.title()
+                  validated[tool] = friendly
+
+              # Post-process: deterministically fix acronyms the 1.5B model often
+              # title-cases (e.g. "Mcp" -> "MCP", "Github" -> "GitHub").
+              # This is more reliable than asking the model to remember the list.
+              ACRONYMS = {
+                  "mcp": "MCP", "github": "GitHub", "api": "API",
+                  "url": "URL", "http": "HTTP", "https": "HTTPS",
+                  "cli": "CLI", "ui": "UI", "io": "IO", "id": "ID",
+                  "vscode": "VSCode", "json": "JSON", "html": "HTML",
+                  "css": "CSS", "sql": "SQL", "git": "Git",
+              }
+              def fix_acronyms(name):
+                  return re.sub(r'\b\w+\b', lambda m: ACRONYMS.get(m.group(0).lower(), m.group(0)), name)
+              validated = {k: fix_acronyms(v) for k, v in validated.items()}
+
+              print("=== Validated names ===", file=sys.stderr)
+              for k, v in validated.items():
+                  print(f"  {k!r} -> {v!r}", file=sys.stderr)
+
+              with open("/tmp/slm-names.json", "w") as f:
+                  json.dump(validated, f, indent=2)
+              print("✅ SLM generation complete", file=sys.stderr)
+
+          except Exception as e:
+              print(f"❌ SLM error: {e}", file=sys.stderr)
+              import traceback; traceback.print_exc(file=sys.stderr)
+              sys.exit(1)
+          PYEOF
+
+      - name: Update toolNames.json with new entries
+        if: steps.extract.outputs.has_missing == 'true'
+        run: |
+          python3 - << 'PYEOF'
+          import json, re, sys
+
+          sys.path.insert(0, ".github/scripts")
+          from toolnames_utils import find_friendly_duplicates, find_matches_for_new_tool
+
+          TOOLNAMES_FILE = "src/toolNames.json"
+
+          with open("/tmp/slm-names.json") as f:
+              new_entries = json.load(f)
+
+          if not new_entries:
+              print("No new entries to add.", file=sys.stderr)
+              sys.exit(0)
+
+          with open(TOOLNAMES_FILE) as f:
+              known_tools = json.load(f)
+
+          to_add = {}
+          for tool_id, friendly_name in new_entries.items():
+              matches = find_matches_for_new_tool(tool_id, known_tools)
+              if matches["exact"]:
+                  print(f"Skipping {tool_id!r} — already present", file=sys.stderr)
+                  continue
+              if matches["case_variant"]:
+                  existing_id = matches["case_variant"][0][0]
+                  print(f"Skipping {tool_id!r} — case variant of {existing_id!r}", file=sys.stderr)
+                  continue
+              if matches["canonical_equivalent"]:
+                  existing_id = matches["canonical_equivalent"][0][0]
+                  print(f"Skipping {tool_id!r} — canonical equivalent of {existing_id!r}", file=sys.stderr)
+                  continue
+              if matches["family_equivalent"]:
+                  print(f"Skipping {tool_id!r} — resolves via known MCP family pattern", file=sys.stderr)
+                  continue
+              friendly_dups = find_friendly_duplicates(friendly_name, known_tools)
+              if friendly_dups:
+                  existing_id, existing_friendly = friendly_dups[0]
+                  print(
+                      f"Skipping {tool_id!r} — friendly name '{friendly_name}' already used by "
+                      f"{existing_id!r} ({existing_friendly})",
+                      file=sys.stderr
+                  )
+                  continue
+              to_add[tool_id] = friendly_name
+
+          if not to_add:
+              print("All entries already present after dedup. Nothing to write.", file=sys.stderr)
+              sys.exit(0)
+
+          ordered_items = list(known_tools.items()) + list(to_add.items())
+
+          lines = ["{\n"]
+          for i, (tool_id, friendly_name) in enumerate(ordered_items):
+              prefix = "  " if i == 0 else "  ,"
+              lines.append(f'{prefix}{json.dumps(tool_id)}: {json.dumps(friendly_name)}\n')
+          lines.append("}\n")
+
+          new_content = "".join(lines)
+          try:
+              json.loads(new_content)
+          except json.JSONDecodeError as e:
+              print(f"❌ JSON validation failed after render: {e}", file=sys.stderr)
+              sys.exit(1)
+
+          with open(TOOLNAMES_FILE, "w") as f:
+              f.write(new_content)
+          print(f"✅ Wrote {len(to_add)} new entries to toolNames.json", file=sys.stderr)
+          PYEOF
+          
+      - name: Restore gradlew files to prevent stash conflicts
+        if: steps.extract.outputs.has_missing == 'true'
+        run: git checkout -- jetbrains-plugin/gradlew.bat jetbrains-plugin/gradlew
+
+      - name: Create Pull Request
+        if: steps.extract.outputs.has_missing == 'true'
+        id: create-pr
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          branch: add-toolnames/issue-${{ github.event.issue.number }}
+          add-paths: src/toolNames.json
+          commit-message: |
+            feat: add friendly names from issue #${{ github.event.issue.number }}
+
+            Generated by Qwen2.5-1.5B SLM from tool names in issue #${{ github.event.issue.number }}.
+
+            Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+          title: "feat: add ${{ steps.extract.outputs.missing_count }} friendly tool name(s) from issue #${{ github.event.issue.number }}"
+          body: |
+            Adds friendly names for tool ID(s) identified in issue #${{ github.event.issue.number }}.
+
+            Generated using **Qwen2.5-1.5B** running locally on the GitHub Actions runner (no Copilot tokens used).
+
+            **Review checklist before merging:**
+            - [ ] Verify each generated friendly name looks correct
+            - [ ] Check if any new tools should also be added to `src/automaticTools.json`
+
+            Closes #${{ github.event.issue.number }}
+          labels: autogenerated,toolnames
+
+      - name: Post result comment on issue
+        if: always() && steps.extract.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          SERVER_URL: ${{ github.server_url }}
+          PR_URL: ${{ steps.create-pr.outputs.pull-request-url }}
+          HAS_MISSING: ${{ steps.extract.outputs.has_missing }}
+        run: |
+          python3 - << 'PYEOF'
+          import json, os
+
+          pr_url    = os.environ.get("PR_URL", "")
+          has_missing = os.environ.get("HAS_MISSING", "false")
+          run_id    = os.environ.get("RUN_ID", "")
+          server_url = os.environ.get("SERVER_URL", "https://github.com")
+          repo      = os.environ.get("REPO", "")
+
+          def esc(s):
+              return str(s).replace("|", "\\|").replace("`", "\\`")
+
+          if has_missing != "true":
+              comment = (
+                  "## 🤖 Add Toolnames (SLM)\n\n"
+                  "✅ All tool names in this issue are already mapped in `toolNames.json`. Nothing to add.\n"
+              )
+          else:
+              slm_path = "/tmp/slm-names.json"
+              names = json.load(open(slm_path)) if os.path.exists(slm_path) else {}
+
+              lines = [
+                  "## 🤖 Add Toolnames (SLM)",
+                  "",
+                  "Generated friendly names using **Qwen2.5-1.5B** running locally on the GitHub Actions runner:",
+                  "",
+                  "| Tool ID | Generated Friendly Name |",
+                  "| --- | --- |",
+              ]
+              for tool_id, friendly in names.items():
+                  lines.append(f"| `{esc(tool_id)}` | {esc(friendly)} |")
+              lines.append("")
+              if pr_url:
+                  lines.append(f"➡️ **[Review PR]({pr_url})** — verify the names look right before merging.")
+                  lines.append("")
+                  lines.append("> ⚠️ Also check whether any of these tools should be added to `automaticTools.json`.")
+              else:
+                  lines.append("> ℹ️ No PR was opened (either no changes were needed or generation failed).")
+              lines.append("")
+              lines.append(f"_Workflow run: {server_url}/{repo}/actions/runs/{run_id}_")
+              comment = "\n".join(lines)
+
+          with open("/tmp/slm-comment.md", "w") as f:
+              f.write(comment)
+          PYEOF
+
+          gh issue comment "$ISSUE_NUMBER" \
+              --repo "$REPO" \
+              --body-file /tmp/slm-comment.md
+
+          echo "✅ Issue comment posted"

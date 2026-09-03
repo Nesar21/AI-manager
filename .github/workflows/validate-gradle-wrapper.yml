@@ -1,0 +1,36 @@
+name: Validate Gradle Wrapper
+
+on:
+  push:
+    paths:
+      - '.github/workflows/validate-gradle-wrapper.yml'
+      - 'jetbrains-plugin/gradlew'
+      - 'jetbrains-plugin/gradlew.bat'
+      - 'jetbrains-plugin/gradle/wrapper/**'
+  pull_request:
+    paths:
+      - '.github/workflows/validate-gradle-wrapper.yml'
+      - 'jetbrains-plugin/gradlew'
+      - 'jetbrains-plugin/gradlew.bat'
+      - 'jetbrains-plugin/gradle/wrapper/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-gradle-wrapper:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate Gradle wrapper JAR
+        uses: gradle/actions/wrapper-validation@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          min-wrapper-count: 1

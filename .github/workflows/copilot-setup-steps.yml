@@ -1,0 +1,227 @@
+name: "Copilot Setup Steps"
+
+# Automatically run the setup steps when they are changed to allow for easy validation, and
+# allow manual testing through the repository's "Actions" tab
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+permissions:
+  contents: read
+
+jobs:
+  # The job MUST be called `copilot-setup-steps` or it will not be picked up by Copilot.
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+
+    # Set the permissions to the lowest permissions possible needed for your steps.
+    # Copilot will be given its own token for its operations.
+    permissions:
+      # If you want to clone the repository as part of your setup steps, for example to install dependencies, 
+      # you'll need the `contents: read` permission. If you don't clone the repository in your setup steps, 
+      # Copilot will do this for you automatically after the steps complete.
+      contents: read
+      # Required to read and write the GitHub Actions cache for agent-sessions data
+      actions: write
+
+    # You can define any steps you want, and they will run before the agent starts.
+    # If you do not check out your code, Copilot will do this for you.
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Copilot code review runs these setup steps against the PR head checkout,
+      # which can be an old branch that predates the root .nvmrc file. Resolve the
+      # version with a fallback so setup-node never fails on a missing file.
+      # Keep the fallback in sync with .nvmrc.
+      - name: Resolve Node.js version
+        id: node-version
+        run: |
+          if [ -f .nvmrc ]; then
+            echo "version=$(tr -d '[:space:]' < .nvmrc)" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::.nvmrc not found in this checkout (stale branch?) - falling back to Node 24"
+            echo "version=24" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ steps.node-version.outputs.version }}
+          cache: "npm"
+          cache-dependency-path: "**/package-lock.json"
+
+      - name: Install JavaScript dependencies
+        run: |
+          cd vscode-extension && npm ci --ignore-scripts
+          cd ../cli && npm ci --ignore-scripts
+
+      # Download session log files from Azure Blob Storage (optional)
+      # This step only runs if Azure Storage credentials are configured in the `copilot` environment
+      - name: Download Copilot session logs from Azure Blob Storage
+        if: ${{ vars.COPILOT_STORAGE_ACCOUNT != '' }}
+        env:
+          AZURE_STORAGE_ACCOUNT: ${{ vars.COPILOT_STORAGE_ACCOUNT }}
+          AZURE_STORAGE_CONTAINER: ${{ vars.COPILOT_STORAGE_CONTAINER || 'copilot-session-logs' }}
+          AZURE_DATASET_ID: ${{ vars.COPILOT_DATASET_ID || 'default' }}
+        run: |
+          echo "📦 Downloading session logs from Azure Blob Storage..."
+          
+          # Create directory for session logs
+          mkdir -p ./session-logs
+          
+          # Calculate date range (last 7 days)
+          # Use GNU date if available, otherwise BSD date (macOS)
+          if date --version >/dev/null 2>&1; then
+            # GNU date (Linux)
+            END_DATE=$(date -u +%Y-%m-%d)
+            START_DATE=$(date -u -d '7 days ago' +%Y-%m-%d)
+          else
+            # BSD date (macOS)
+            END_DATE=$(date -u +%Y-%m-%d)
+            START_DATE=$(date -u -v-7d +%Y-%m-%d)
+          fi
+          
+          echo "Date range: $START_DATE to $END_DATE"
+          
+          # Check if Azure CLI is available
+          if ! command -v az &> /dev/null; then
+            echo "⚠️ Azure CLI not installed, skipping session log download"
+            exit 0
+          fi
+          
+          # Check if authenticated (will be true if using Entra ID via azure/login action)
+          if ! az account show &> /dev/null; then
+            echo "⚠️ Not authenticated with Azure, skipping session log download"
+            echo "💡 To enable: configure Azure authentication in the copilot environment"
+            exit 0
+          fi
+          
+          # Download blobs from the dataset path
+          echo "Downloading from container: $AZURE_STORAGE_CONTAINER, dataset: $AZURE_DATASET_ID"
+          
+          # Download all blobs matching the dataset path pattern
+          # This downloads: {dataset}/{machine-id}/{date}/session-*.json.gz
+          az storage blob download-batch \
+            --account-name "$AZURE_STORAGE_ACCOUNT" \
+            --source "$AZURE_STORAGE_CONTAINER" \
+            --destination ./session-logs \
+            --pattern "${AZURE_DATASET_ID}/*/*/*.json.gz" \
+            --auth-mode login \
+            --no-progress || {
+              echo "⚠️ Failed to download session logs, continuing without them"
+              exit 0
+            }
+          
+          # Count downloaded files
+          FILE_COUNT=$(find ./session-logs -name "*.json.gz" | wc -l)
+          echo "✅ Downloaded $FILE_COUNT session log files"
+          
+          # Decompress all files
+          if [ "$FILE_COUNT" -gt 0 ]; then
+            echo "📂 Decompressing session logs..."
+            find ./session-logs -name "*.gz" -exec gunzip {} \;
+            echo "✅ Session logs ready in ./session-logs"
+          fi
+
+      - name: Display session log summary
+        if: ${{ vars.COPILOT_STORAGE_ACCOUNT != '' }}
+        run: |
+          if [ -d ./session-logs ]; then
+            echo "📊 Session log summary:"
+            echo "Total files: $(find ./session-logs -name "*.json" | wc -l)"
+            echo "Directory structure:"
+            tree -L 3 ./session-logs || ls -R ./session-logs
+          else
+            echo "No session logs available"
+          fi
+
+      # Download aggregated usage data from Azure Table Storage (optional)
+      # Uses the existing load-table-data.js helper script from the azure-storage-loader skill
+      - name: Install Azure Storage loader dependencies
+        if: ${{ vars.COPILOT_STORAGE_ACCOUNT != '' }}
+        run: |
+          cd .github/skills/azure-storage-loader
+          npm ci --ignore-scripts --production
+
+      - name: Download aggregated usage data from Azure Table Storage
+        if: ${{ vars.COPILOT_STORAGE_ACCOUNT != '' }}
+        env:
+          AZURE_STORAGE_ACCOUNT: ${{ vars.COPILOT_STORAGE_ACCOUNT }}
+          AZURE_TABLE_NAME: ${{ vars.COPILOT_TABLE_NAME || 'usageAggDaily' }}
+          AZURE_DATASET_ID: ${{ vars.COPILOT_DATASET_ID || 'default' }}
+          AZURE_TABLE_DATA_DAYS: ${{ vars.COPILOT_TABLE_DATA_DAYS || '30' }}
+          AZURE_STORAGE_KEY: ${{ secrets.COPILOT_STORAGE_KEY }}
+        run: |
+          echo "📊 Downloading aggregated usage data from Azure Table Storage..."
+
+          mkdir -p ./usage-data
+
+          # Calculate date range
+          END_DATE=$(date -u +%Y-%m-%d)
+          START_DATE=$(date -u -d "${AZURE_TABLE_DATA_DAYS} days ago" +%Y-%m-%d)
+          echo "Date range: $START_DATE to $END_DATE"
+
+          # Build command arguments
+          ARGS=(--storageAccount "$AZURE_STORAGE_ACCOUNT")
+          ARGS+=(--tableName "$AZURE_TABLE_NAME")
+          ARGS+=(--datasetId "$AZURE_DATASET_ID")
+          ARGS+=(--startDate "$START_DATE")
+          ARGS+=(--endDate "$END_DATE")
+          ARGS+=(--output ./usage-data/usage-agg-daily.json)
+
+          # Use shared key if available, otherwise rely on Entra ID (DefaultAzureCredential)
+          if [ -n "$AZURE_STORAGE_KEY" ]; then
+            ARGS+=(--sharedKey "$AZURE_STORAGE_KEY")
+          fi
+
+          node .github/skills/azure-storage-loader/load-table-data.js "${ARGS[@]}" || {
+            echo "⚠️ Failed to download aggregated usage data, continuing without it"
+            exit 0
+          }
+
+          if [ -f ./usage-data/usage-agg-daily.json ]; then
+            ENTITY_COUNT=$(node -e "const d=require('./usage-data/usage-agg-daily.json'); console.log(d.length)")
+            echo "✅ Downloaded $ENTITY_COUNT aggregated usage records to ./usage-data/usage-agg-daily.json"
+          else
+            echo "⚠️ No aggregated usage data file created"
+          fi
+
+      # Fetch Copilot cloud-agent session statistics (cached daily to limit API calls)
+      - name: Set agent sessions cache date key
+        id: cache-date
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore agent sessions cache
+        id: restore-agent-sessions-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ./usage-data/agent-sessions.json
+          key: agent-sessions-${{ github.repository }}-${{ steps.cache-date.outputs.date }}
+          restore-keys: agent-sessions-${{ github.repository }}-
+
+      - name: Fetch Copilot agent sessions
+        if: steps.restore-agent-sessions-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          echo "🤖 Fetching Copilot cloud-agent session data (not cached yet for today)..."
+          node scripts/fetch-agent-sessions.js
+
+      - name: Save agent sessions cache
+        if: steps.restore-agent-sessions-cache.outputs.cache-hit != 'true' && hashFiles('./usage-data/agent-sessions.json') != ''
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ./usage-data/agent-sessions.json
+          key: agent-sessions-${{ github.repository }}-${{ steps.cache-date.outputs.date }}

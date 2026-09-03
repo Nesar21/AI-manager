@@ -1,0 +1,268 @@
+name: Visual Studio Extension - Build & Package
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'visualstudio-extension/**'
+      - 'cli/**'
+      - 'src/**'
+      - '.github/workflows/visualstudio-build.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'visualstudio-extension/**'
+      - 'cli/**'
+      - 'src/**'
+      - '.github/workflows/visualstudio-build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & Package
+    # Windows required: Node.js SEA (bundle-exe.ps1) and MSBuild/VSSDK are Windows-only
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    outputs:
+      vsix_path: ${{ steps.vsix.outputs.vsix_path }}
+      vsix_name: ${{ steps.vsix.outputs.vsix_name }}
+
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+
+      # ── Install dependencies ────────────────────────────────────────────────
+
+      - name: Install vscode-extension dependencies
+        run: npm ci --ignore-scripts
+        working-directory: vscode-extension
+
+      - name: Install CLI dependencies
+        run: npm ci --ignore-scripts
+        working-directory: cli
+
+      # ── Build & validate CLI (js bundle) ───────────────────────────────────
+
+      - name: Build CLI (production bundle)
+        working-directory: cli
+        run: npm run build:production
+
+      - name: Validate CLI --help
+        working-directory: cli
+        run: node dist/cli.js --help
+
+      - name: Validate CLI new commands
+        working-directory: cli
+        run: |
+          node dist/cli.js chart --json
+          node dist/cli.js usage-analysis --json
+          node dist/cli.js all --json
+
+      # ── Bundle CLI as Windows .exe (Node.js SEA) ───────────────────────────
+
+      - name: Bundle CLI as single executable
+        working-directory: cli
+        shell: pwsh
+        run: |
+          & pwsh -NoProfile -File bundle-exe.ps1 -SkipBuild
+          if ($LASTEXITCODE -ne 0) { throw "bundle-exe.ps1 failed" }
+
+      - name: Verify CLI exe was produced
+        working-directory: cli
+        shell: pwsh
+        run: |
+          $exe = "dist\copilot-token-tracker.exe"
+          if (-not (Test-Path $exe)) { throw "CLI exe not found at $exe" }
+          $sizeMB = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+          Write-Host "✅ CLI exe: $exe ($sizeMB MB)"
+
+      # ── Copy CLI bundle into VS extension project ──────────────────────────
+
+      - name: Copy CLI exe + wasm to cli-bundle/
+        shell: pwsh
+        run: |
+          $vsCliDir = "visualstudio-extension\src\AIEngineeringFluency\cli-bundle"
+          New-Item -ItemType Directory -Path $vsCliDir -Force | Out-Null
+          Copy-Item "cli\dist\copilot-token-tracker.exe" "$vsCliDir\copilot-token-tracker.exe" -Force
+          Copy-Item "cli\dist\sql-wasm.wasm"             "$vsCliDir\sql-wasm.wasm"             -Force
+          Write-Host "✅ Copied cli-bundle assets"
+
+      # ── Build webview bundles (chart.js, usage.js, etc.) ──────────────────
+
+      - name: Build VS Code extension webview bundles
+        working-directory: vscode-extension
+        run: npm run package
+
+      - name: Copy webview bundles to VS extension project
+        shell: pwsh
+        run: |
+          $src = "vscode-extension\dist\webview"
+          $dst = "visualstudio-extension\src\AIEngineeringFluency\webview"
+          if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
+          Copy-Item $src $dst -Recurse -Force
+          Write-Host "✅ Copied webview bundles:"
+          Get-ChildItem $dst -Filter "*.js" | ForEach-Object { Write-Host "   $($_.Name)" }
+
+      # ── Build Visual Studio extension (MSBuild / VSSDK) ───────────────────
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+
+      - name: Restore NuGet packages
+        working-directory: visualstudio-extension
+        run: nuget restore AIEngineeringFluency.sln
+
+      - name: Restore test project (SDK-style)
+        working-directory: visualstudio-extension
+        run: dotnet restore src/AIEngineeringFluency.Tests/AIEngineeringFluency.Tests.csproj
+
+      - name: Build solution (Release)
+        working-directory: visualstudio-extension
+        run: msbuild AIEngineeringFluency.sln /p:Configuration=Release /t:Build /v:minimal
+
+      # ── Run unit tests with coverage ──────────────────────────────────────
+
+      - name: Run unit tests with coverage
+        working-directory: visualstudio-extension
+        run: >-
+          dotnet test src/AIEngineeringFluency.Tests/AIEngineeringFluency.Tests.csproj
+          --no-build
+          --configuration Release
+          --logger "trx;LogFileName=test-results.trx"
+          --collect:"XPlat Code Coverage"
+          --results-directory TestResults
+
+      - name: Generate coverage summary
+        if: always()
+        shell: pwsh
+        working-directory: visualstudio-extension
+        run: |
+          $coverageFile = Get-ChildItem -Path TestResults -Filter "coverage.cobertura.xml" -Recurse |
+                          Select-Object -First 1
+          if (-not $coverageFile) {
+            Write-Host "⚠️ No coverage file found"
+            "## ⚠️ Unit Test Coverage`nNo coverage data collected." >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          Write-Host "Coverage file: $($coverageFile.FullName)"
+
+          [xml]$xml = Get-Content $coverageFile.FullName
+
+          $lineRate   = [double]$xml.coverage.'line-rate'   * 100
+          $branchRate = [double]$xml.coverage.'branch-rate' * 100
+
+          $linePct   = [math]::Round($lineRate, 1)
+          $branchPct = [math]::Round($branchRate, 1)
+
+          # Build per-package (namespace) breakdown
+          $packageRows = ""
+          foreach ($pkg in $xml.coverage.packages.package) {
+              $pkgName = $pkg.name
+              $pkgLine   = [math]::Round([double]$pkg.'line-rate'   * 100, 1)
+              $pkgBranch = [math]::Round([double]$pkg.'branch-rate' * 100, 1)
+              $packageRows += "| ``$pkgName`` | $pkgLine% | $pkgBranch% |`n"
+          }
+
+          # Build per-class breakdown for classes with notable coverage data
+          $classRows = ""
+          foreach ($pkg in $xml.coverage.packages.package) {
+              foreach ($cls in $pkg.classes.class) {
+                  $clsName = $cls.name
+                  $clsLine   = [math]::Round([double]$cls.'line-rate'   * 100, 1)
+                  $clsBranch = [math]::Round([double]$cls.'branch-rate' * 100, 1)
+                  $classRows += "| ``$clsName`` | $clsLine% | $clsBranch% |`n"
+              }
+          }
+
+          # Write step summary
+          $summary = @"
+          ## 🧪 Visual Studio Extension — Unit Test Coverage
+
+          | Metric | Coverage |
+          |--------|----------|
+          | **Line Coverage** | $linePct% |
+          | **Branch Coverage** | $branchPct% |
+
+          ### By Namespace
+
+          | Namespace | Line | Branch |
+          |-----------|------|--------|
+          $packageRows
+
+          <details><summary>By Class</summary>
+
+          | Class | Line | Branch |
+          |-------|------|--------|
+          $classRows
+
+          </details>
+          "@
+
+          $summary >> $env:GITHUB_STEP_SUMMARY
+          Write-Host "✅ Coverage: $linePct% line, $branchPct% branch"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vs-test-results-${{ github.sha }}
+          path: visualstudio-extension/TestResults/
+          retention-days: 30
+
+      # ── Collect the produced .vsix ─────────────────────────────────────────
+
+      - name: Find .vsix artifact
+        id: vsix
+        if: always()
+        shell: pwsh
+        run: |
+          $vsix = Get-ChildItem -Path "visualstudio-extension" -Filter "*.vsix" -Recurse |
+                  Sort-Object LastWriteTime -Descending |
+                  Select-Object -First 1
+          if (-not $vsix) { throw "No .vsix file produced" }
+          $sizeMB = [math]::Round($vsix.Length / 1MB, 1)
+          Write-Host "✅ VSIX: $($vsix.FullName) ($sizeMB MB)"
+          echo "vsix_path=$($vsix.FullName)" >> $env:GITHUB_OUTPUT
+          echo "vsix_name=$($vsix.Name)"     >> $env:GITHUB_OUTPUT
+
+      - name: Upload .vsix as artifact
+        if: steps.vsix.outputs.vsix_path != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: copilot-token-tracker-vs-${{ github.sha }}
+          path: ${{ steps.vsix.outputs.vsix_path }}
+          retention-days: 30
+
+      # ── Summary ────────────────────────────────────────────────────────────
+
+      - name: Build summary
+        if: always()
+        shell: pwsh
+        run: |
+          $vsixName = "${{ steps.vsix.outputs.vsix_name }}"
+          if ($vsixName) {
+            @"
+          ## ✅ Visual Studio Extension Built Successfully
+
+          | Item | Value |
+          |------|-------|
+          | VSIX | ``$vsixName`` |
+          | Trigger | ``${{ github.event_name }}`` |
+          | Commit | ``${{ github.sha }}`` |
+          "@ >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            "## ❌ Build failed — no .vsix produced" >> $env:GITHUB_STEP_SUMMARY
+          }

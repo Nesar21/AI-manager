@@ -1,0 +1,737 @@
+// Maturity Score webview
+import { navButtonsHtml } from '../shared/buttonConfig';
+import type { ContextReferenceUsage } from '../shared/contextRefUtils';
+import { setHtml } from '../shared/domUtils';
+import { escapeHtml, markdownToHtml, safeSectionHtml, STAGE_LABELS, STAGE_DESCRIPTIONS } from '../shared/formatUtils';
+import { wireExtensionPointButtons } from '../shared/extensionPoints';
+import { buildDarkFactorySectionHtml } from './darkFactorySection';
+import type { DarkFactoryReport } from '../../../../src/types';
+import type { McpToolUsage, ModeUsage, ModelSwitchingAnalysis, ToolCallUsage, CategoryLevelData } from '../shared/types';
+import themeStyles from '../shared/theme.css';
+import styles from './styles.css';
+import { getWindowData } from '../../../../src/webview/shared/dataLoader';
+import { initializeWebviewLocalization, setCurrentLanguage } from '../shared/localization';
+
+type UsageAnalysisPeriod = {
+	sessions: number;
+	toolCalls: ToolCallUsage;
+	modeUsage: ModeUsage;
+	contextReferences: ContextReferenceUsage;
+	mcpTools: McpToolUsage;
+	modelSwitching: ModelSwitchingAnalysis;
+	repositories: string[];
+	repositoriesWithCustomization: string[];
+	editScope?: { singleFileEdits: number; multiFileEdits: number; totalEditedFiles: number; avgFilesPerSession: number };
+	applyUsage?: { totalApplies: number; totalCodeBlocks: number; applyRate: number };
+	sessionDuration?: { totalDurationMs: number; avgDurationMs: number; avgFirstProgressMs: number; avgTotalElapsedMs: number; avgWaitTimeMs: number; activeDurationMs: number };
+	conversationPatterns?: { multiTurnSessions: number; singleTurnSessions: number; avgTurnsPerSession: number; maxTurnsInSession: number };
+	agentTypes?: { editsAgent: number; defaultAgent: number; workspaceAgent: number; other: number };
+};
+
+type CategoryScore = {
+	category: string;
+	icon: string;
+	stage: number;       // 1-4
+	evidence: string[];  // what signals led to this score
+	tips: string[];      // suggestions to reach next stage
+};
+
+type AgenticTrendPoint = {
+	date: string;
+	multiAgentParentSessions: number;
+	delegationSessions: number;
+};
+
+type MaturityData = {
+	overallStage: number;
+	overallLabel: string;
+	categories: CategoryScore[];
+	period: UsageAnalysisPeriod;
+	lastUpdated: string;
+	agenticTrend?: AgenticTrendPoint[];
+	dismissedTips?: string[];
+	isDebugMode?: boolean;
+	fluencyLevels?: CategoryLevelData[];
+	backendConfigured?: boolean;
+	installedHooks?: string[];
+	/** Per-repository Dark Factory readiness scan; absent when the scan could not run. */
+	darkFactory?: DarkFactoryReport;
+};
+
+// Maps a category name to the hook id that provides a session reminder for it
+const CATEGORY_HOOK_MAP: Record<string, string> = {
+	'Customization': 'missing-instructions',
+	'Context Engineering': 'no-context-refs',
+	'Tool Usage': 'no-mcp-config',
+};
+
+declare function acquireVsCodeApi<TState = unknown>(): {
+	postMessage: (message: unknown) => void;
+	setState: (newState: TState) => void;
+	getState: () => TState | undefined;
+};
+
+const vscode = acquireVsCodeApi();
+const initialData = getWindowData<MaturityData & { localization?: Record<string, string> }>('__INITIAL_MATURITY__');
+
+// Initialize localization for webview
+if (initialData?.localization) {
+	initializeWebviewLocalization(initialData.localization);
+	const language = initialData.localization['__language__'] || 'en';
+	setCurrentLanguage(language);
+}
+
+// ── Demo mode state ─────────────────────────────────────────────────────
+
+let demoModeActive = false;
+let demoStageOverrides: number[] = [];
+let demoPanelExpanded = false; // Hidden by default
+
+// ── Radar chart SVG ────────────────────────────────────────────────────
+
+function renderRadarChart(categories: CategoryScore[], overallStage: number): string {
+	// Content extends maxR + 35 (label radius) + ~20 (label text) above/below
+	// center, so a 650x410 viewBox wraps it tightly without empty bands.
+	const cx = 325, cy = 205, maxR = 150;
+	const n = categories.length;
+	const angleStep = (2 * Math.PI) / n;
+	// Start from top (- PI/2)
+	const startAngle = -Math.PI / 2;
+
+	// Overall-stage fill/stroke colors — fixed blue palette
+	const polyFill = 'rgba(88,166,255,0.25)';
+	const polyStroke = '#58a6ff';
+
+	// Grid rings (1–4)
+	const rings = [1, 2, 3, 4].map(level => {
+		const r = (level / 4) * maxR;
+		const points = Array.from({ length: n }, (_, i) => {
+			const angle = startAngle + i * angleStep;
+			return `${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`;
+		}).join(' ');
+		return `<polygon points="${points}" fill="none" class="radar-grid" stroke-width="1" />`;
+	}).join('');
+
+	// Axis lines
+	const axes = Array.from({ length: n }, (_, i) => {
+		const angle = startAngle + i * angleStep;
+		const x2 = cx + maxR * Math.cos(angle);
+		const y2 = cy + maxR * Math.sin(angle);
+		return `<line x1="${cx}" y1="${cy}" x2="${x2}" y2="${y2}" class="radar-grid" stroke-width="1" />`;
+	}).join('');
+
+	// Data polygon
+	const dataPoints = categories.map((cat, i) => {
+		const r = (cat.stage / 4) * maxR;
+		const angle = startAngle + i * angleStep;
+		return `${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`;
+	}).join(' ');
+
+	// Labels
+	const labels = categories.map((cat, i) => {
+		const angle = startAngle + i * angleStep;
+		const labelR = maxR + 35;
+		const x = cx + labelR * Math.cos(angle);
+		const y = cy + labelR * Math.sin(angle);
+		// Adjust anchor based on position
+		let anchor = 'middle';
+		if (Math.cos(angle) < -0.3) { anchor = 'end'; }
+		else if (Math.cos(angle) > 0.3) { anchor = 'start'; }
+		return `<text x="${x}" y="${y}" text-anchor="${anchor}" dominant-baseline="central"
+			class="radar-label" font-size="14" font-weight="600">${cat.icon} ${cat.category}</text>`;
+	}).join('');
+
+	// Stage dots — use overall-stage color for consistency with polygon
+	const dots = categories.map((cat, i) => {
+		const r = (cat.stage / 4) * maxR;
+		const angle = startAngle + i * angleStep;
+		const x = cx + r * Math.cos(angle);
+		const y = cy + r * Math.sin(angle);
+		return `<circle cx="${x}" cy="${y}" r="5" fill="${polyStroke}" class="radar-dot" stroke-width="1.5" />`;
+	}).join('');
+
+	// Ring labels — stage names matching server
+	const ringLabelNames = ['', 'AI Skeptic', 'Explorer', 'Collaborator', 'Strategist'];
+	const ringLabels = [1, 2, 3, 4].map(level => {
+		const r = (level / 4) * maxR;
+		return `<text x="${cx + 4}" y="${cy - r + 3}" class="radar-ring-label" font-size="9">${ringLabelNames[level]}</text>`;
+	}).join('');
+
+	return `<svg viewBox="0 0 650 410" class="radar-svg" xmlns="http://www.w3.org/2000/svg">
+		${rings}
+		${axes}
+		<polygon points="${dataPoints}" fill="${polyFill}" stroke="${polyStroke}" stroke-width="2" />
+		${dots}
+		${labels}
+		${ringLabels}
+	</svg>`;
+}
+
+function stageColor(stage: number): string {
+	switch (stage) {
+		case 1: return '#93c5fd';
+		case 2: return '#a78bfa';
+		case 3: return '#3b82f6';
+		case 4: return '#22d3ee';
+		default: return '#666';
+	}
+}
+
+// ── Multi-Agent Usage sparkline ────────────────────────────────────────
+
+/** Renders a small inline SVG sparkline of daily multi-agent-parent + delegation sessions, for the Agentic category card. */
+function renderAgenticSparkline(trend: AgenticTrendPoint[] | undefined): string {
+	if (!trend || trend.length === 0) { return ''; }
+	const totalSessions = trend.reduce((sum, p) => sum + p.multiAgentParentSessions + p.delegationSessions, 0);
+	if (totalSessions === 0) { return ''; }
+
+	const width = 260, height = 46, padding = 4;
+	const maxVal = Math.max(1, ...trend.map(p => p.multiAgentParentSessions + p.delegationSessions));
+	const n = trend.length;
+	const stepX = n > 1 ? (width - padding * 2) / (n - 1) : 0;
+	const toY = (v: number) => height - padding - (v / maxVal) * (height - padding * 2);
+
+	const linePoints = (values: number[]) =>
+		values.map((v, i) => `${(padding + i * stepX).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+
+	const totalPoints = linePoints(trend.map(p => p.multiAgentParentSessions + p.delegationSessions));
+	const parentPoints = linePoints(trend.map(p => p.multiAgentParentSessions));
+
+	const first = escapeHtml(trend[0].date);
+	const last = escapeHtml(trend[n - 1].date);
+
+	return `
+    <div class="agentic-sparkline" style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2a30;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+        <span style="font-size: 11px; font-weight: 600; color: #999;">📈 Multi-Agent Usage (last ${n} days)</span>
+      </div>
+      <svg viewBox="0 0 ${width} ${height}" width="100%" height="${height}" xmlns="http://www.w3.org/2000/svg">
+        <polyline points="${totalPoints}" fill="none" stroke="#22d3ee" stroke-width="2" />
+        <polyline points="${parentPoints}" fill="none" stroke="#a78bfa" stroke-width="1.5" stroke-dasharray="3,2" />
+      </svg>
+      <div style="display: flex; justify-content: space-between; font-size: 9px; color: #666;">
+        <span>${first}</span>
+        <span style="color:#22d3ee;">— total</span>
+        <span style="color:#a78bfa;">┄ multi-agent parents</span>
+        <span>${last}</span>
+      </div>
+    </div>`;
+}
+
+
+// ── Demo controls ──────────────────────────────────────────────────────
+
+function renderDemoControls(categories: CategoryScore[]): string {
+	const sliders = categories.map((cat, i) => {
+		const currentStage = demoModeActive ? demoStageOverrides[i] : cat.stage;
+		const stageButtons = [1, 2, 3, 4].map(s =>
+			`<button class="demo-step-btn ${s === currentStage ? 'demo-step-active' : ''} demo-step-${s}" data-index="${i}" data-stage="${s}">${s}</button>`
+		).join('');
+		return `
+			<div class="demo-slider-row">
+				<label class="demo-slider-label">${cat.icon} ${escapeHtml(cat.category)}</label>
+				<div class="demo-step-group">${stageButtons}</div>
+				<span class="demo-slider-value badge-${currentStage}" data-value-index="${i}">${escapeHtml(STAGE_LABELS[currentStage] || '')}</span>
+			</div>
+		`;
+	}).join('');
+
+	return `
+		<div class="demo-panel">
+			<div class="demo-panel-header ${demoPanelExpanded ? '' : 'demo-collapsed'}">
+				<div class="demo-panel-title">
+					<button class="demo-expand-btn" id="demo-expand-toggle" title="${demoPanelExpanded ? 'Collapse' : 'Expand'} Demo Mode Panel">
+						${demoPanelExpanded ? '▼' : '▶'}
+					</button>
+					🐛 Demo Mode — Override Spider Chart
+				</div>
+				<div class="demo-panel-actions ${demoPanelExpanded ? '' : 'demo-hidden'}">
+					<button class="demo-btn demo-btn-toggle" id="demo-toggle">${demoModeActive ? '⏸ Disable Overrides' : '▶ Enable Overrides'}</button>
+					<button class="demo-btn demo-btn-reset" id="demo-reset">↺ Reset to Actual</button>
+				</div>
+			</div>
+			<div class="demo-sliders ${demoModeActive ? '' : 'demo-disabled'} ${demoPanelExpanded ? '' : 'demo-hidden'}">
+				${sliders}
+			</div>
+		</div>
+	`;
+}
+
+function wireDemoControls(data: MaturityData): void {
+	// Initialize overrides from actual data if not set
+	if (demoStageOverrides.length === 0) {
+		demoStageOverrides = data.categories.map(c => c.stage);
+	}
+
+	document.getElementById('demo-expand-toggle')?.addEventListener('click', () => {
+		demoPanelExpanded = !demoPanelExpanded;
+		renderLayout(data);
+	});
+
+	document.getElementById('demo-toggle')?.addEventListener('click', () => {
+		demoModeActive = !demoModeActive;
+		renderLayout(data);
+	});
+
+	document.getElementById('demo-reset')?.addEventListener('click', () => {
+		demoStageOverrides = data.categories.map(c => c.stage);
+		demoModeActive = false;
+		renderLayout(data);
+	});
+
+	document.querySelectorAll('.demo-step-btn').forEach(btn => {
+		btn.addEventListener('click', (e) => {
+			const target = e.currentTarget as HTMLElement;
+			const idx = parseInt(target.getAttribute('data-index') || '0', 10);
+			const stage = parseInt(target.getAttribute('data-stage') || '1', 10);
+			demoStageOverrides[idx] = stage;
+			if (demoModeActive) {
+				renderLayout(data);
+			}
+		});
+	});
+}
+
+// ── Main render ────────────────────────────────────────────────────────
+
+function buildDemoCategoryCardHtml(
+  cat: CategoryScore,
+  catIdx: number,
+  demoStage: number,
+  displayStage: number,
+  progressPct: number,
+  color: string,
+  data: MaturityData,
+): string {
+  const levelData = data.fluencyLevels?.find(l => l.category === cat.category);
+  const stageInfo = levelData?.levels.find(l => l.stage === demoStage);
+
+  const thresholdsHtml = stageInfo && stageInfo.thresholds.length > 0
+    ? stageInfo.thresholds.map(t =>
+      `<li class="evidence-item"><span class="evidence-icon">🎯</span><span>${escapeHtml(t)}</span></li>`
+    ).join('')
+    : '<li class="evidence-item"><span class="evidence-icon">-</span><span>No thresholds defined</span></li>';
+
+  const tipsHtml = stageInfo && stageInfo.tips.length > 0
+    ? stageInfo.tips.map(t => `<div class="tip-item">${markdownToHtml(t)}</div>`).join('')
+    : '<div class="tip-item" style="color:#666;">No tips for this stage</div>';
+
+  const description = stageInfo?.description || '';
+  return `
+    <div class="category-card demo-card-highlight">
+      <div class="category-header">
+        <span class="category-name">${cat.icon} ${escapeHtml(cat.category)}</span>
+        <span class="category-stage-badge badge-${displayStage}">Stage ${displayStage}</span>
+      </div>
+      <div class="category-stage-label">${escapeHtml(STAGE_LABELS[displayStage] || 'Unknown')}</div>
+      <div class="demo-card-description">${escapeHtml(description)}</div>
+      <div class="category-progress">
+        <div class="category-progress-fill" style="width: ${progressPct}%; background: ${color};"></div>
+      </div>
+      <div class="demo-section-label">🎯 Requirements to Reach This Stage</div>
+      <ul class="evidence-list">${thresholdsHtml}</ul>
+      <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2a30;">
+        <div class="demo-section-label">💡 Tips</div>
+        ${tipsHtml}
+      </div>
+    </div>`;
+}
+
+function buildHookReminderButton(category: string, tipsCount: number, installedHooks: string[]): string {
+  const hookId = CATEGORY_HOOK_MAP[category];
+  if (!hookId || tipsCount === 0) { return ''; }
+  const isInstalled = installedHooks.includes(hookId);
+  if (isInstalled) {
+    return `<div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+      <button class="hook-reminder-btn hook-reminder-active" data-hook-id="${escapeHtml(hookId)}" data-action="uninstallHook" title="Remove session reminder" style="font-size: 11px; padding: 3px 10px; background: transparent; border: 1px solid #58a6ff; color: #58a6ff; border-radius: 4px; cursor: pointer;">✓ Reminder active</button>
+      <button class="hook-reminder-btn hook-reminder-remove" data-hook-id="${escapeHtml(hookId)}" data-action="uninstallHook" title="Remove session reminder" style="font-size: 10px; background: transparent; border: none; color: #666; cursor: pointer; text-decoration: underline;">remove</button>
+    </div>`;
+  }
+  return `<div style="margin-top: 8px;">
+    <button class="hook-reminder-btn" data-hook-id="${escapeHtml(hookId)}" data-action="installHook" title="Install a Copilot hook that reminds you in future sessions" style="font-size: 11px; padding: 3px 10px; background: transparent; border: 1px solid #444; color: #ccc; border-radius: 4px; cursor: pointer;">🔔 Remind me in sessions</button>
+  </div>`;
+}
+
+function buildCategoryCard(
+  cat: CategoryScore,
+  catIdx: number,
+  dismissedTips: string[],
+  useDemoCards: boolean,
+  data: MaturityData,
+): string {
+  const demoStage = demoStageOverrides[catIdx] ?? cat.stage;
+  const displayStage = useDemoCards ? demoStage : cat.stage;
+  const progressPct = (displayStage / 4) * 100;
+  const color = stageColor(displayStage);
+
+  if (useDemoCards && data.fluencyLevels) {
+    return buildDemoCategoryCardHtml(cat, catIdx, demoStage, displayStage, progressPct, color, data);
+  }
+
+  const evidenceHtml = cat.evidence.map(e =>
+    `<li class="evidence-item"><span class="evidence-icon">&#x2713;</span><span>${escapeHtml(e)}</span></li>`
+  ).join('');
+  const tipsHtml = cat.tips.length > 0
+    ? cat.tips.map(t => {
+      if (t.includes('\n')) {
+        const lines = t.split('\n').filter(line => line.trim());
+        const summary = lines[0];
+        const hasHeader = lines.length > 1 && lines[1].toLowerCase().includes('top repos');
+        if (hasHeader && lines.length > 2) {
+          const header = lines[1];
+          const listItems = lines.slice(2).map(item => `<li>${markdownToHtml(item)}</li>`).join('');
+          return `<div class="tip-item">${markdownToHtml(summary)}<div style="margin-top: 8px; font-weight: 600; font-size: 11px; color: #999;">${markdownToHtml(header)}</div><ul style="margin: 6px 0 0 0; padding-left: 18px; list-style: disc;">${listItems}</ul></div>`;
+        } else {
+          return `<div class="tip-item">${lines.map(line => markdownToHtml(line)).join('<br>')}</div>`;
+        }
+      } else {
+        return `<div class="tip-item">${markdownToHtml(t)}</div>`;
+      }
+    }).join('')
+    : '<div class="tip-item" style="color:#666;">No specific suggestions - you\'re doing great!</div>';
+
+  const tipsAreDismissed = dismissedTips.includes(cat.category);
+  const mcpButton = cat.category === 'Tool Usage' ? `
+    <div style="margin-top: 10px;">
+      <button class="mcp-discover-btn" data-action="searchMcp">🔍 Discover more MCP Servers in Marketplace</button>
+    </div>
+  ` : '';
+
+  const hookButton = buildHookReminderButton(cat.category, cat.tips.length, data.installedHooks ?? []);
+  const sparklineHtml = cat.category === 'Agentic' ? renderAgenticSparkline(data.agenticTrend) : '';
+
+  return `
+    <div class="category-card">
+      <div class="category-header">
+        <span class="category-name">${cat.icon} ${escapeHtml(cat.category)}</span>
+        <span class="category-stage-badge badge-${cat.stage}">Stage ${cat.stage}</span>
+      </div>
+      <div class="category-stage-label">${escapeHtml(STAGE_LABELS[cat.stage] || 'Unknown')}</div>
+      <div class="category-progress">
+        <div class="category-progress-fill" style="width: ${progressPct}%; background: ${color};"></div>
+      </div>
+      <ul class="evidence-list">${evidenceHtml || '<li class="evidence-item"><span class="evidence-icon">-</span><span>No significant activity detected</span></li>'}</ul>
+      ${sparklineHtml}
+      ${!tipsAreDismissed && cat.tips.length > 0 ? `
+        <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #2a2a30;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <div style="font-size: 11px; font-weight: 600; color: #f59e0b;">💡 Next steps to level up:</div>
+            <button class="dismiss-tips-btn" data-category="${escapeHtml(cat.category)}" title="Dismiss these tips">✕</button>
+          </div>
+          ${tipsHtml}
+        </div>
+      ` : ''}${hookButton}${mcpButton}</div>`;
+}
+
+function buildShareSectionHtml(): string {
+  return `
+  <div class="share-section">
+    <div class="share-header"><span class="share-icon">📢</span><span class="share-title">Share Your AI Engineering Fluency Score</span></div>
+    <div class="share-description">Share your progress with the community and inspire others to level up their AI engineering skills!</div>
+    <div class="share-buttons">
+      <button id="btn-share-linkedin" class="share-btn share-btn-linkedin"><span class="share-btn-icon">💼</span><span>Share on LinkedIn</span></button>
+      <button id="btn-share-bluesky" class="share-btn share-btn-bluesky"><span class="share-btn-icon">🦋</span><span>Share on Bluesky</span></button>
+      <button id="btn-share-mastodon" class="share-btn share-btn-mastodon"><span class="share-btn-icon">🐘</span><span>Share on Mastodon</span></button>
+      <div class="export-dropdown-container">
+        <button id="btn-export-toggle" class="share-btn share-btn-download"><span class="share-btn-icon">💾</span><span>Export Fluency Score</span><span class="dropdown-arrow">▼</span></button>
+        <div id="export-dropdown" class="export-dropdown-menu" style="display: none;">
+          <button class="export-menu-item" data-export-type="png"><span class="export-menu-icon">🖼️</span><span>Export as PNG Image</span></button>
+          <button class="export-menu-item" data-export-type="pdf"><span class="export-menu-icon">📄</span><span>Export as PDF Report</span></button>
+          <button class="export-menu-item" data-export-type="pptx"><span class="export-menu-icon">📊</span><span>Export as PowerPoint</span></button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function buildMaturityRootHtml(
+  data: MaturityData,
+  categoryCards: string,
+  dismissedTips: string[],
+): string {
+  const categories = demoModeActive
+    ? data.categories.map((c, i) => ({ ...c, stage: demoStageOverrides[i] ?? c.stage }))
+    : data.categories;
+  const radarStage = demoModeActive
+    ? Math.round(demoStageOverrides.reduce((s, v) => s + v, 0) / demoStageOverrides.length)
+    : data.overallStage;
+  return `
+    <style>${themeStyles}</style>
+    <style>${styles}</style>
+    <div class="container">
+      <div class="header">
+        <div class="header-left">
+          <span class="header-icon">🎯</span>
+          <span class="header-title">AI Engineering Fluency Score</span>
+        </div>
+        <div class="button-row">
+          ${navButtonsHtml('btn-maturity', !!data.backendConfigured)}
+        </div>
+      </div>
+      <div class="info-box">
+        <div class="info-box-title">📋 About This Dashboard</div>
+        <div>
+          This dashboard maps your AI tool usage patterns from the last 30 days to a maturity model with 4 stages across 6 categories.
+          It helps you understand which AI capabilities you already use and suggests areas to explore for greater productivity.
+          <br><br>
+          📖 <a href="https://github.com/rajbos/ai-engineering-fluency/blob/main/docs/FLUENCY-LEVELS.md" class="beta-link">Read the full scoring rules</a> to learn how each category and stage is calculated. <button id="btn-level-viewer-inline" class="inline-action-btn">📊 How is my score calculated?</button>
+          <br><br>
+          <strong>Note:</strong> Scores are based on data from session log files. Some features (e.g., inline suggestion acceptance) cannot be tracked via logs.
+        </div>
+      </div>
+      <div class="stage-banner">
+        <div class="stage-banner-label">Overall AI Engineering Fluency</div>
+        <div class="stage-banner-title stage-${data.overallStage}">${escapeHtml(data.overallLabel)}</div>
+        <div class="stage-banner-subtitle">${escapeHtml(STAGE_DESCRIPTIONS[data.overallStage] || '')}</div>
+      </div>
+      ${data.isDebugMode ? renderDemoControls(data.categories) : ''}
+      <div class="radar-wrapper">
+        <div class="radar-container">
+          ${renderRadarChart(categories, radarStage)}
+        </div>
+        <div class="legend-panel">
+          <div class="legend-title">Stage Reference</div>
+          <div class="legend-item"><div class="legend-dot stage-1-dot"></div><div class="legend-content"><div class="legend-label">Stage 1: AI Skeptic</div><div class="legend-desc">Rarely uses AI tools or uses only basic features</div></div></div>
+          <div class="legend-item"><div class="legend-dot stage-2-dot"></div><div class="legend-content"><div class="legend-label">Stage 2: AI Explorer</div><div class="legend-desc">Exploring AI capabilities with occasional use</div></div></div>
+          <div class="legend-item"><div class="legend-dot stage-3-dot"></div><div class="legend-content"><div class="legend-label">Stage 3: AI Collaborator</div><div class="legend-desc">Regular, purposeful use across multiple features</div></div></div>
+          <div class="legend-item"><div class="legend-dot stage-4-dot"></div><div class="legend-content"><div class="legend-label">Stage 4: AI Strategist</div><div class="legend-desc">Strategic, advanced use leveraging the full AI ecosystem</div></div></div>
+        </div>
+      </div>
+      <div class="category-grid">${categoryCards}</div>
+      ${safeSectionHtml('Dark Factory Readiness', () => buildDarkFactorySectionHtml(data.darkFactory))}
+      <div class="footer">
+        <span class="footer-info">Based on last 30 days of activity &middot; Last updated: ${new Date(data.lastUpdated).toLocaleString()} &middot; Updates every 5 minutes</span>
+        ${dismissedTips.length > 0 ? `<button id="btn-reset-tips" class="reset-tips-btn" title="Show all dismissed improvement suggestions again">🔄 Reset Dismissed Tips</button>` : ''}
+      </div>
+      ${buildShareSectionHtml()}
+      <div class="beta-footer">
+        <span class="beta-footer-icon">⚠️</span>
+        <div class="beta-footer-content"><strong>Beta</strong> — This screen is still in beta. If you have feedback or suggestions for improvements, please <a href="https://github.com/rajbos/ai-engineering-fluency/issues" class="beta-link">create an issue</a> on the repository.</div>
+        <button id="btn-share-issue" class="share-issue-btn">📤 Share to Issue</button>
+      </div>
+    </div>
+  `;
+}
+
+function handlePngExport(): void {
+  const svgEl = document.querySelector('.radar-svg') as SVGSVGElement | null;
+  if (!svgEl) { return; }
+
+  const clone = svgEl.cloneNode(true) as SVGSVGElement;
+  const vb = (svgEl.getAttribute('viewBox') || '0 0 650 410').split(/\s+/).map(Number);
+  const exportWidth = 1100;
+  const exportHeight = Math.round(exportWidth * ((vb[3] || 410) / (vb[2] || 650)));
+  clone.setAttribute('width', String(exportWidth));
+  clone.setAttribute('height', String(exportHeight));
+  const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  bg.setAttribute('width', '100%');
+  bg.setAttribute('height', '100%');
+  bg.setAttribute('fill', '#1b1b1e');
+  clone.insertBefore(bg, clone.firstChild);
+
+  const svgData = new XMLSerializer().serializeToString(clone);
+  const encodedSvg = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svgData)));
+
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = exportWidth;
+    canvas.height = exportHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { return; }
+    ctx.drawImage(img, 0, 0, exportWidth, exportHeight);
+    const dataUrl = canvas.toDataURL('image/png');
+    vscode.postMessage({ command: 'saveChartImage', data: dataUrl });
+  };
+  img.onerror = () => {
+    vscode.postMessage({ command: 'downloadChartImage' });
+  };
+  img.src = encodedSvg;
+}
+
+async function handleScreenshotExport(command: 'exportPdf' | 'exportPptx'): Promise<void> {
+  const html2canvasModule = await import('html2canvas');
+  const html2canvas = (html2canvasModule.default ?? html2canvasModule) as unknown as (element: HTMLElement, options?: Record<string, unknown>) => Promise<HTMLCanvasElement>;
+
+  const images: { label: string; dataUrl: string }[] = [];
+
+  const stageBanner = document.querySelector('.stage-banner') as HTMLElement | null;
+  const radarWrapper = document.querySelector('.radar-wrapper') as HTMLElement | null;
+
+  const coverContainer = document.createElement('div');
+  coverContainer.style.cssText = 'position:absolute;left:-9999px;top:0;width:1200px;background:#1b1b1e;padding:24px;border-radius:10px;';
+
+  const titleEl = document.createElement('div');
+  titleEl.style.cssText = 'text-align:center;margin-bottom:20px;';
+  setHtml(titleEl, `<div style="font-size:28px;font-weight:800;color:#fff;margin-bottom:8px;">AI Engineering Fluency Score</div><div style="font-size:16px;color:#b8b8c8;">Report &middot; ${new Date().toLocaleDateString()}</div>`);
+  coverContainer.appendChild(titleEl);
+
+  if (stageBanner) { coverContainer.appendChild(stageBanner.cloneNode(true)); }
+  if (radarWrapper) { coverContainer.appendChild(radarWrapper.cloneNode(true)); }
+
+  document.body.appendChild(coverContainer);
+  try {
+    const coverCanvas = await html2canvas(coverContainer, { backgroundColor: '#1b1b1e', scale: 2, useCORS: true });
+    images.push({ label: 'Cover', dataUrl: coverCanvas.toDataURL('image/png') });
+  } finally {
+    document.body.removeChild(coverContainer);
+  }
+
+  const cards = Array.from(document.querySelectorAll('.category-card'));
+  for (const card of cards) {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'position:absolute;left:-9999px;top:0;width:900px;background:#1b1b1e;padding:24px;border-radius:10px;';
+    wrapper.appendChild(card.cloneNode(true));
+    document.body.appendChild(wrapper);
+    try {
+      const cardCanvas = await html2canvas(wrapper, { backgroundColor: '#1b1b1e', scale: 2, useCORS: true });
+      const nameEl = card.querySelector('.category-name');
+      const label = nameEl?.textContent?.trim() || 'Category';
+      images.push({ label, dataUrl: cardCanvas.toDataURL('image/png') });
+    } finally {
+      document.body.removeChild(wrapper);
+    }
+  }
+
+  vscode.postMessage({ command, data: images });
+}
+
+async function handleShareToSocial(platform: 'linkedin' | 'bluesky' | 'mastodon'): Promise<void> {
+  const data = initialData;
+  if (!data) { return; }
+
+  const html2canvasModule = await import('html2canvas');
+  const html2canvas = (html2canvasModule.default ?? html2canvasModule) as unknown as (element: HTMLElement, options?: Record<string, unknown>) => Promise<HTMLCanvasElement>;
+
+  const card = document.createElement('div');
+  card.style.cssText = 'position:absolute;left:-9999px;top:0;width:1200px;height:630px;background:#1b1b1e;border-radius:16px;display:flex;flex-direction:column;justify-content:center;align-items:center;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;';
+
+  const stageColors = ['#93c5fd', '#a78bfa', '#3b82f6', '#22d3ee'];
+  const stageColor = stageColors[data.overallStage - 1] || '#58a6ff';
+
+  setHtml(card, `
+    <div style="text-align:center;color:#fff;padding:48px;">
+      <div style="font-size:28px;margin-bottom:12px;">🎯 AI Engineering Fluency Score</div>
+      <div style="font-size:14px;color:#b8b8c8;margin-bottom:32px;text-transform:uppercase;letter-spacing:2px;">Overall AI Engineering Fluency</div>
+      <div style="font-size:56px;font-weight:800;color:${stageColor};margin-bottom:12px;">${escapeHtml(data.overallLabel)}</div>
+      <div style="font-size:20px;color:#b8b8c8;margin-bottom:40px;">${escapeHtml(STAGE_DESCRIPTIONS[data.overallStage] || '')}</div>
+      <div style="font-size:22px;font-weight:700;color:#58a6ff;margin-bottom:8px;">#AIEngineeringFluency</div>
+      <div style="font-size:14px;color:#7a7a8a;">Track your AI usage with AI Engineering Fluency</div>
+    </div>
+  `);
+
+  document.body.appendChild(card);
+  try {
+    const canvas = await html2canvas(card, { backgroundColor: '#1b1b1e', scale: 2, useCORS: true, width: 1200, height: 630 });
+    const dataUrl = canvas.toDataURL('image/png');
+    vscode.postMessage({ command: 'shareToSocial', platform, dataUrl });
+  } catch {
+    vscode.postMessage({ command: 'shareToSocialFailed', platform });
+  } finally {
+    document.body.removeChild(card);
+  }
+}
+
+function wireMaturityNavButtons(): void {
+  document.getElementById('btn-refresh')?.addEventListener('click', () => { vscode.postMessage({ command: 'refresh' }); });
+  document.getElementById('btn-level-viewer-inline')?.addEventListener('click', () => { vscode.postMessage({ command: 'showFluencyLevelViewer' }); });
+  document.getElementById('btn-details')?.addEventListener('click', () => { vscode.postMessage({ command: 'showDetails' }); });
+  document.getElementById('btn-chart')?.addEventListener('click', () => { vscode.postMessage({ command: 'showChart' }); });
+  document.getElementById('btn-usage')?.addEventListener('click', () => { vscode.postMessage({ command: 'showUsageAnalysis' }); });
+  document.getElementById('btn-diagnostics')?.addEventListener('click', () => { vscode.postMessage({ command: 'showDiagnostics' }); });
+  document.getElementById('btn-dashboard')?.addEventListener('click', () => { vscode.postMessage({ command: 'showDashboard' }); });
+  document.getElementById('btn-environmental')?.addEventListener('click', () => { vscode.postMessage({ command: 'showEnvironmental' }); });
+  document.getElementById('btn-efficiency')?.addEventListener('click', () => { vscode.postMessage({ command: 'showEfficiency' }); });
+  wireExtensionPointButtons(vscode);
+}
+
+function wireMaturityActionButtons(): void {
+  document.getElementById('btn-share-issue')?.addEventListener('click', () => { vscode.postMessage({ command: 'shareToIssue' }); });
+  document.querySelector('.mcp-discover-btn')?.addEventListener('click', () => { vscode.postMessage({ command: 'searchMcpExtensions' }); });
+  document.querySelectorAll('.hook-reminder-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const target = e.currentTarget as HTMLElement;
+      const hookId = target.getAttribute('data-hook-id');
+      const action = target.getAttribute('data-action');
+      if (hookId && action) { vscode.postMessage({ command: action, hookId }); }
+    });
+  });
+  document.querySelectorAll('.dismiss-tips-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
+      const category = target.getAttribute('data-category');
+      if (category) { vscode.postMessage({ command: 'dismissTips', category }); }
+    });
+  });
+  document.getElementById('btn-reset-tips')?.addEventListener('click', () => { vscode.postMessage({ command: 'resetDismissedTips' }); });
+  document.getElementById('btn-share-linkedin')?.addEventListener('click', () => { void handleShareToSocial('linkedin'); });
+  document.getElementById('btn-share-bluesky')?.addEventListener('click', () => { void handleShareToSocial('bluesky'); });
+  document.getElementById('btn-share-mastodon')?.addEventListener('click', () => { void handleShareToSocial('mastodon'); });
+}
+
+function wireExportHandlers(): void {
+  const exportToggleBtn = document.getElementById('btn-export-toggle');
+  const exportDropdown = document.getElementById('export-dropdown');
+
+  exportToggleBtn?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (exportDropdown) {
+      const isVisible = exportDropdown.style.display === 'block';
+      exportDropdown.style.display = isVisible ? 'none' : 'block';
+    }
+  });
+
+  document.addEventListener('click', () => {
+    if (exportDropdown) { exportDropdown.style.display = 'none'; }
+  });
+
+  document.querySelectorAll('.export-menu-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const target = e.currentTarget as HTMLElement;
+      const exportType = target.getAttribute('data-export-type');
+      if (exportDropdown) { exportDropdown.style.display = 'none'; }
+      if (exportType === 'png') {
+        handlePngExport();
+      } else if (exportType === 'pdf') {
+        void handleScreenshotExport('exportPdf');
+      } else if (exportType === 'pptx') {
+        void handleScreenshotExport('exportPptx');
+      }
+    });
+  });
+}
+
+function renderLayout(data: MaturityData): void {
+  const root = document.getElementById('root');
+  if (!root) { return; }
+
+  const dismissedTips = data.dismissedTips || [];
+  const useDemoCards = demoModeActive && data.fluencyLevels;
+  const categoryCards = data.categories.map((cat, catIdx) =>
+    buildCategoryCard(cat, catIdx, dismissedTips, Boolean(useDemoCards), data)
+  ).join('');
+
+  setHtml(root, buildMaturityRootHtml(data, categoryCards, dismissedTips));
+
+  wireMaturityNavButtons();
+  wireMaturityActionButtons();
+  wireExportHandlers();
+
+  if (data.isDebugMode) {
+    wireDemoControls(data);
+  }
+}
+
+async function bootstrap(): Promise<void> {
+	await import('@vscode-elements/elements/dist/vscode-button/index.js');
+
+	if (!initialData) {
+		const root = document.getElementById('root');
+		if (root) { root.textContent = 'No data available.'; }
+		return;
+	}
+	renderLayout(initialData);
+}
+
+void bootstrap();

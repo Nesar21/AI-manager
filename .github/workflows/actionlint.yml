@@ -1,0 +1,36 @@
+name: actionlint
+
+on:
+  push:
+    paths:
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  run-actionlint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner (Block all outbound calls except allowed)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: block
+          # Allowlist inferred from the harden-runner audit output of the 10 most
+          # recent successful runs of this workflow (run ids 28548602130..28791579209).
+          allowed-endpoints: >
+            auth.docker.io:443
+            github.com:443
+            production.cloudfront.docker.com:443
+            registry-1.docker.io:443
+            results-receiver.actions.githubusercontent.com:443
+
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run actionlint
+        uses: devops-actions/actionlint@ec02b36684b2f574f1d219ad0a43b082e46bf3e4 # v0.1.13

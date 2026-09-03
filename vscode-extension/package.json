@@ -1,0 +1,623 @@
+{
+  "name": "ai-engineering-fluency",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "0.17.3",
+  "publisher": "RobBos",
+  "icon": "assets/logo.png",
+  "engines": {
+    "vscode": "^1.134.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rajbos/ai-engineering-fluency"
+  },
+  "author": {
+    "name": "Rob Bos",
+    "email": "rob@example.com"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Repository hygiene analysis runs `git` commands and scans files inside the workspace folder, so it is disabled in untrusted workspaces. Token/session usage tracking, dashboards, and insights only read AI session logs from your user home directory and continue to work normally."
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "Repository hygiene analysis relies on a local `git` checkout and workspace filesystem access, so it is disabled for virtual workspaces. Token/session usage tracking, dashboards, and insights only read AI session logs from your user home directory and continue to work normally."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "aiEngineeringFluency.refresh",
+        "title": "%command.refresh.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.showDetails",
+        "title": "%command.showDetails.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.showChart",
+        "title": "%command.showChart.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.showUsageAnalysis",
+        "title": "%command.showUsageAnalysis.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.openMcpJson",
+        "title": "%command.openMcpJson.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.generateDiagnosticReport",
+        "title": "%command.generateDiagnosticReport.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.showMaturity",
+        "title": "%command.showMaturity.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.showFluencyLevelViewer",
+        "title": "%command.showFluencyLevelViewer.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.runLocalViewRegression",
+        "title": "%command.runLocalViewRegression.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.configureBackend",
+        "title": "%command.configureBackend.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.configureTeamServer",
+        "title": "%command.configureTeamServer.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.copyBackendConfig",
+        "title": "%command.copyBackendConfig.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.exportCurrentView",
+        "title": "%command.exportCurrentView.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.setBackendSharedKey",
+        "title": "%command.setBackendSharedKey.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.rotateBackendSharedKey",
+        "title": "%command.rotateBackendSharedKey.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.clearBackendSharedKey",
+        "title": "%command.clearBackendSharedKey.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.toggleBackendWorkspaceMachineNameSync",
+        "title": "%command.toggleBackendWorkspaceMachineNameSync.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.setSharingProfile",
+        "title": "%command.setSharingProfile.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.clearAzureSettings",
+        "title": "%command.clearAzureSettings.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.clearCache",
+        "title": "%command.clearCache.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.resetInsightsState",
+        "title": "%command.resetInsightsState.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.showDashboard",
+        "title": "%command.showDashboard.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.showEnvironmental",
+        "title": "%command.showEnvironmental.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.showEfficiency",
+        "title": "%command.showEfficiency.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.authenticateGitHub",
+        "title": "%command.authenticateGitHub.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.signOutGitHub",
+        "title": "%command.signOutGitHub.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "copilot-token-tracker.checkWindsurfStatus",
+        "title": "%command.checkWindsurfStatus.title%",
+        "category": "AI Manager"
+      },
+      {
+        "command": "aiEngineeringFluency.tokenReducerSummary",
+        "title": "Token Reducer: Show Session Summary",
+        "category": "AI Manager"
+      }
+    ],
+    "configuration": {
+      "title": "%config.title%",
+      "properties": {
+        "aiEngineeringFluency.display.compactNumbers": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.display.compactNumbers.description%"
+        },
+        "aiEngineeringFluency.tokenReducer.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Token Reducer: Automatically strip whitespace and filler from prompts and attached files to reduce token usage before sending to Copilot."
+        },
+        "aiEngineeringFluency.tokenReducer.stripComments": {
+          "type": "boolean",
+          "default": false,
+          "description": "Token Reducer: Also strip inline and block comments from attached code files. Off by default to preserve context."
+        },
+        "aiEngineeringFluency.display.use24HourTime": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.display.use24HourTime.description%"
+        },
+        "aiEngineeringFluency.display.hideAutomaticToolCalls": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.display.hideAutomaticToolCalls.description%"
+        },
+        "aiEngineeringFluency.display.statusBar.showTokens": {
+          "type": "string",
+          "enum": [
+            "none",
+            "today",
+            "last30days",
+            "currentMonth",
+            "both",
+            "todayAndCurrentMonth"
+          ],
+          "enumDescriptions": [
+            "%config.display.statusBar.showTokens.enum.none%",
+            "%config.display.statusBar.showTokens.enum.today%",
+            "%config.display.statusBar.showTokens.enum.last30days%",
+            "%config.display.statusBar.showTokens.enum.currentMonth%",
+            "%config.display.statusBar.showTokens.enum.both%",
+            "%config.display.statusBar.showTokens.enum.todayAndCurrentMonth%"
+          ],
+          "default": "both",
+          "description": "%config.display.statusBar.showTokens.description%"
+        },
+        "aiEngineeringFluency.display.statusBar.showCost": {
+          "type": "string",
+          "enum": [
+            "none",
+            "today",
+            "last30days",
+            "currentMonth",
+            "both",
+            "todayAndCurrentMonth"
+          ],
+          "enumDescriptions": [
+            "%config.display.statusBar.showCost.enum.none%",
+            "%config.display.statusBar.showCost.enum.today%",
+            "%config.display.statusBar.showCost.enum.last30days%",
+            "%config.display.statusBar.showCost.enum.currentMonth%",
+            "%config.display.statusBar.showCost.enum.both%",
+            "%config.display.statusBar.showCost.enum.todayAndCurrentMonth%"
+          ],
+          "default": "none",
+          "description": "%config.display.statusBar.showCost.description%"
+        },
+        "aiEngineeringFluency.display.statusBar.monthlyBudget": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "%config.display.statusBar.monthlyBudget.description%"
+        },
+        "aiEngineeringFluency.backend.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.backend.enabled.description%"
+        },
+        "aiEngineeringFluency.backend.backend": {
+          "type": "string",
+          "enum": [
+            "storageTables",
+            "sharingServer"
+          ],
+          "enumDescriptions": [
+            "%config.backend.backend.enum.storageTables%",
+            "%config.backend.backend.enum.sharingServer%"
+          ],
+          "default": "storageTables",
+          "description": "%config.backend.backend.description%"
+        },
+        "aiEngineeringFluency.backend.authMode": {
+          "type": "string",
+          "enum": [
+            "entraId",
+            "sharedKey"
+          ],
+          "default": "entraId",
+          "description": "%config.backend.authMode.description%"
+        },
+        "aiEngineeringFluency.backend.datasetId": {
+          "type": "string",
+          "default": "default",
+          "description": "%config.backend.datasetId.description%"
+        },
+        "aiEngineeringFluency.backend.sharingProfile": {
+          "type": "string",
+          "enum": [
+            "off",
+            "soloFull",
+            "teamAnonymized",
+            "teamPseudonymous",
+            "teamIdentified"
+          ],
+          "enumDescriptions": [
+            "%config.backend.sharingProfile.enum.off%",
+            "%config.backend.sharingProfile.enum.soloFull%",
+            "%config.backend.sharingProfile.enum.teamAnonymized%",
+            "%config.backend.sharingProfile.enum.teamPseudonymous%",
+            "%config.backend.sharingProfile.enum.teamIdentified%"
+          ],
+          "default": "off",
+          "description": "%config.backend.sharingProfile.description%"
+        },
+        "aiEngineeringFluency.backend.userId": {
+          "type": "string",
+          "default": "",
+          "description": "%config.backend.userId.description%"
+        },
+        "aiEngineeringFluency.backend.shareWithTeam": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.backend.shareWithTeam.description%"
+        },
+        "aiEngineeringFluency.backend.shareWorkspaceMachineNames": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.backend.shareWorkspaceMachineNames.description%"
+        },
+        "aiEngineeringFluency.backend.shareConsentAt": {
+          "type": "string",
+          "default": "",
+          "description": "%config.backend.shareConsentAt.description%"
+        },
+        "aiEngineeringFluency.backend.userIdentityMode": {
+          "type": "string",
+          "enum": [
+            "pseudonymous",
+            "teamAlias",
+            "entraObjectId"
+          ],
+          "default": "pseudonymous",
+          "description": "%config.backend.userIdentityMode.description%"
+        },
+        "aiEngineeringFluency.backend.userIdMode": {
+          "type": "string",
+          "enum": [
+            "alias",
+            "custom"
+          ],
+          "default": "alias",
+          "description": "%config.backend.userIdMode.description%"
+        },
+        "aiEngineeringFluency.backend.subscriptionId": {
+          "type": "string",
+          "default": "",
+          "description": "%config.backend.subscriptionId.description%"
+        },
+        "aiEngineeringFluency.backend.resourceGroup": {
+          "type": "string",
+          "default": "",
+          "description": "%config.backend.resourceGroup.description%"
+        },
+        "aiEngineeringFluency.backend.storageAccount": {
+          "type": "string",
+          "default": "",
+          "description": "%config.backend.storageAccount.description%"
+        },
+        "aiEngineeringFluency.backend.aggTable": {
+          "type": "string",
+          "default": "usageAggDaily",
+          "description": "%config.backend.aggTable.description%"
+        },
+        "aiEngineeringFluency.backend.eventsTable": {
+          "type": "string",
+          "default": "usageEvents",
+          "description": "%config.backend.eventsTable.description%"
+        },
+        "aiEngineeringFluency.backend.lookbackDays": {
+          "type": "number",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 90,
+          "description": "%config.backend.lookbackDays.description%"
+        },
+        "aiEngineeringFluency.backend.includeMachineBreakdown": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.backend.includeMachineBreakdown.description%"
+        },
+        "aiEngineeringFluency.backend.blobUploadEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.backend.blobUploadEnabled.description%"
+        },
+        "aiEngineeringFluency.backend.blobContainerName": {
+          "type": "string",
+          "default": "copilot-session-logs",
+          "description": "%config.backend.blobContainerName.description%"
+        },
+        "aiEngineeringFluency.backend.blobUploadFrequencyHours": {
+          "type": "number",
+          "default": 24,
+          "minimum": 1,
+          "maximum": 168,
+          "description": "%config.backend.blobUploadFrequencyHours.description%"
+        },
+        "aiEngineeringFluency.backend.blobCompressFiles": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.backend.blobCompressFiles.description%"
+        },
+        "aiEngineeringFluency.backend.sharingServer.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "%config.backend.sharingServer.enabled.description%"
+        },
+        "aiEngineeringFluency.backend.sharingServer.endpointUrl": {
+          "type": "string",
+          "default": "",
+          "description": "%config.backend.sharingServer.endpointUrl.description%"
+        },
+        "aiEngineeringFluency.sampleDataDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "%config.sampleDataDirectory.description%"
+        },
+        "aiEngineeringFluency.suppressedUnknownTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "%config.suppressedUnknownTools.description%"
+        },
+        "aiEngineeringFluency.curation.timeWindowDays": {
+          "type": "number",
+          "default": 30,
+          "enum": [
+            7,
+            30,
+            90
+          ],
+          "enumDescriptions": [
+            "%config.curation.timeWindowDays.enum.7%",
+            "%config.curation.timeWindowDays.enum.30%",
+            "%config.curation.timeWindowDays.enum.90%"
+          ],
+          "description": "%config.curation.timeWindowDays.description%"
+        },
+        "aiEngineeringFluency.toolFamilies": {
+          "type": "array",
+          "default": [],
+          "description": "%config.toolFamilies.description%",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "builtIn",
+              "alternatives"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable identifier used for override matching (e.g. 'reading'). Must be unique."
+              },
+              "name": {
+                "type": "string",
+                "description": "Display name shown in the Tool Analysis tab."
+              },
+              "builtIn": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Built-in / baseline tool names that define the reference performance. Tool names must match exactly as they appear in session logs."
+              },
+              "alternatives": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Alternative or efficient-replacement tool names to compare against the built-ins."
+              },
+              "description": {
+                "type": "string",
+                "description": "Optional short description of this tool family."
+              }
+            }
+          }
+        },
+        "aiEngineeringFluency.insights.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.insights.enabled.description%"
+        },
+        "aiEngineeringFluency.insights.toastsEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.insights.toastsEnabled.description%"
+        },
+        "aiEngineeringFluency.insights.cadenceDays": {
+          "type": "number",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 30,
+          "description": "%config.insights.cadenceDays.description%"
+        },
+        "copilotTokenTracker.windsurf.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.copilotTokenTracker.windsurf.enabled.description%"
+        },
+        "copilotTokenTracker.windsurf.includeCascadeDetails": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.copilotTokenTracker.windsurf.includeCascadeDetails.description%"
+        },
+        "copilotTokenTracker.windsurf.cacheCredentials": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.copilotTokenTracker.windsurf.cacheCredentials.description%"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "node esbuild.js",
+    "validate": "npm run check-types && npm run lint && npm run compile",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "tsc --noEmit && eslint src ../src && node esbuild.js --production",
+    "prepare-test-output": "node ../scripts/prepare-test-output.js",
+    "compile-tests": "node ../scripts/prepare-test-output.js && tsc -p tsconfig.tests.json",
+    "watch-tests": "tsc -p tsconfig.tests.json -w",
+    "pretest": "tsc --noEmit && eslint src ../src && node ../scripts/prepare-test-output.js && tsc -p tsconfig.tests.json",
+    "check-types": "tsc --noEmit",
+    "validate:l10n": "node scripts/validate-l10n.mjs",
+    "lint": "eslint src ../src",
+    "lint:report": "eslint src ../src --format json",
+    "lint:css": "stylelint \"src/webview/**/*.css\"",
+    "lint:json": "node ../scripts/validate-json.js",
+    "lint:l10n": "node ../scripts/validate-localization.js",
+    "test": "node ../scripts/run-node-unit-tests.js",
+    "test:node": "node ../scripts/prepare-test-output.js && tsc -p tsconfig.tests.json && node ../scripts/run-node-unit-tests.js",
+    "test:coverage": "node ../scripts/prepare-test-output.js && tsc -p tsconfig.tests.json && node --require ./out/vscode-extension/test/unit/vscode-shim-register.js --experimental-test-coverage --test --test-force-exit --test-coverage-lines=65 --test-coverage-functions=70 --test-coverage-branches=60 --test-coverage-include=out/vscode-extension/src/backend/**/*.js --test-coverage-include=out/vscode-extension/src/utils/**/*.js --test-coverage-include=out/src/utils/**/*.js --test-coverage-include=out/src/usageAnalysis.js --test-coverage-include=out/src/tokenEstimation.js --test-coverage-include=out/src/maturityScoring.js out/vscode-extension/test/unit/*.test.js",
+    "test:coverage:ci": "node --require ./out/vscode-extension/test/unit/vscode-shim-register.js --experimental-test-coverage --test --test-force-exit --test-coverage-include=out/vscode-extension/src/backend/**/*.js --test-coverage-include=out/vscode-extension/src/utils/**/*.js --test-coverage-include=out/src/utils/**/*.js --test-coverage-include=out/src/usageAnalysis.js --test-coverage-include=out/src/tokenEstimation.js --test-coverage-include=out/src/maturityScoring.js out/vscode-extension/test/unit/*.test.js",
+    "test:mutation": "npm run compile-tests && npx stryker run",
+    "package:pre-release": "tsc --noEmit && eslint src ../src && node esbuild.js --production && npx vsce package --pre-release",
+    "pre-release": "node ../scripts/pre-release.js",
+    "capture-screenshots": "pwsh -File ../scripts/capture-screenshots.ps1",
+    "visual:render": "node ../.github/skills/visual-view-diff/render-views.js",
+    "visual:diff": "node ../.github/skills/visual-view-diff/visual-diff.js",
+    "sync-changelog": "node ../scripts/sync-changelog.js",
+    "sync-changelog:test": "node ../scripts/sync-changelog.js --test",
+    "cli:build": "cd cli && npm install && npm run build",
+    "cli:build:production": "cd cli && npm install && npm run build:production",
+    "cli:stats": "cd cli && node dist/cli.js stats",
+    "cli:usage": "cd cli && node dist/cli.js usage",
+    "cli:environmental": "cd cli && node dist/cli.js environmental",
+    "cli:fluency": "cd cli && node dist/cli.js fluency",
+    "cli": "cd cli && node dist/cli.js"
+  },
+  "devDependencies": {
+    "@github/copilot": "^1.0.81",
+    "@stryker-mutator/core": "^10.0.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^26.4.0",
+    "@types/sql.js": "1.4.11",
+    "@types/vscode": "1.134.0",
+    "@typescript-eslint/eslint-plugin": "^8.68.0",
+    "@typescript-eslint/parser": "^8.42.0",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.9.1",
+    "eslint-plugin-sonarjs": "4.2.0",
+    "npm-run-all": "^4.1.5",
+    "ovsx": "1.1.1",
+    "stylelint": "^17.14.1",
+    "stylelint-config-standard": "^40.0.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@azure/arm-resources": "^8.0.0",
+    "@azure/arm-resources-subscriptions": "^3.0.0",
+    "@azure/arm-storage": "^20.1.0",
+    "@azure/arm-subscriptions": "^6.0.0",
+    "@azure/data-tables": "^13.3.2",
+    "@azure/identity": "^4.13.2",
+    "@azure/storage-blob": "^12.33.0",
+    "@msgpack/msgpack": "^3.1.3",
+    "@vscode-elements/elements": "^2.5.1",
+    "chart.js": "^4.4.1",
+    "html-escape": "^2.0.0",
+    "html2canvas": "1.4.1",
+    "jsdom": "^30.0.1",
+    "jspdf": "4.2.1",
+    "pptxgenjs": "4.0.1",
+    "sql.js": "1.14.2"
+  },
+  "overrides": {
+    "@azure/msal-node": "5.1.4",
+    "@babel/core": ">=7.29.6",
+    "brace-expansion": ">=5.0.8",
+    "diff": ">=8.0.3",
+    "dompurify": ">=3.4.13",
+    "fast-uri": ">=4.1.2",
+    "qs": ">=6.15.2",
+    "serialize-javascript": ">=7.0.3",
+    "cheerio": {
+      "undici": "7.29.0"
+    },
+    "uuid": "^14.0.0"
+  },
+  "allowScripts": {
+    "core-js@3.49.0": true,
+    "esbuild@0.28.1": true,
+    "keytar@7.9.0": true
+  },
+  "__metadata": {
+    "localization": {
+      "uri": "./package.nls.json",
+      "availableLanguages": {
+        "": "en",
+        "zh-cn": "zh-CN"
+      }
+    }
+  }
+}

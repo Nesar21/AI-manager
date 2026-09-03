@@ -1,0 +1,181 @@
+/**
+ * Centralized button configuration for webview navigation.
+ * This ensures consistent button IDs, labels, and icons across all webviews.
+ */
+
+import { localize } from './localization';
+
+export type ButtonId = 'btn-refresh' | 'btn-details' | 'btn-chart' | 'btn-usage' | 'btn-diagnostics' | 'btn-maturity' | 'btn-dashboard' | 'btn-level-viewer' | 'btn-environmental' | 'btn-efficiency';
+
+export interface ButtonConfig {
+	id: ButtonId;
+	label: string;
+	/** Codicon name (without the `codicon-` prefix), rendered as a `<span class="codicon codicon-<icon>">` before the label. */
+	icon?: string;
+	/**
+	 * Accent color for the icon glyph only (label text stays the theme's normal button color).
+	 * Applied via a CSS custom property so high-contrast themes can override it back to
+	 * `currentColor` — see `.nav-icon` in theme.css.
+	 */
+	iconColor?: string;
+	appearance?: 'primary' | 'secondary';
+	/** When true, the button is not rendered in the UI (code is preserved for re-enabling later). */
+	hidden?: boolean;
+	/** When true, the button represents the currently open view and is rendered in a distinct, non-clickable state. */
+	active?: boolean;
+}
+
+/**
+ * Static button metadata (icon/appearance/etc.) keyed by the l10n key used to resolve the
+ * label, rather than the resolved label string. Every button besides Refresh renders as
+ * `appearance: 'secondary'` (outlined) so the row doesn't read as a wall of identical solid
+ * pills; the active view is still picked out via the `.nav-active` treatment in theme.css
+ * regardless of this base appearance.
+ */
+const BUTTON_DEFS: Record<ButtonId, Omit<ButtonConfig, 'label'> & { labelKey: string }> = {
+	'btn-refresh': {
+		id: 'btn-refresh',
+		labelKey: 'nav.btnRefresh',
+		icon: 'refresh',
+		appearance: 'primary'
+	},
+	'btn-details': {
+		id: 'btn-details',
+		labelKey: 'nav.btnDetails',
+		icon: 'robot',
+		iconColor: '#c37bff',
+		appearance: 'secondary'
+	},
+	'btn-chart': {
+		id: 'btn-chart',
+		labelKey: 'nav.btnChart',
+		icon: 'graph-line',
+		iconColor: '#60a5fa',
+		appearance: 'secondary'
+	},
+	'btn-usage': {
+		id: 'btn-usage',
+		labelKey: 'nav.btnUsage',
+		icon: 'graph',
+		iconColor: '#22d3ee',
+		appearance: 'secondary'
+	},
+	'btn-diagnostics': {
+		id: 'btn-diagnostics',
+		labelKey: 'nav.btnDiagnostics',
+		icon: 'search',
+		iconColor: '#fb7185',
+		appearance: 'secondary'
+	},
+	'btn-maturity': {
+		id: 'btn-maturity',
+		labelKey: 'nav.btnMaturity',
+		icon: 'target',
+		iconColor: '#fbbf24',
+		appearance: 'secondary'
+	},
+	'btn-dashboard': {
+		id: 'btn-dashboard',
+		labelKey: 'nav.btnDashboard',
+		icon: 'organization',
+		iconColor: '#818cf8',
+		appearance: 'secondary'
+  },
+	'btn-level-viewer': {
+		id: 'btn-level-viewer',
+		labelKey: 'nav.btnLevelViewer',
+		icon: 'list-tree',
+		iconColor: '#94a3b8',
+		appearance: 'secondary'
+	},
+	'btn-environmental': {
+		id: 'btn-environmental',
+		labelKey: 'nav.btnEnvironmental',
+		icon: 'globe',
+		iconColor: '#4ade80',
+		appearance: 'secondary'
+	},
+	'btn-efficiency': {
+		id: 'btn-efficiency',
+		labelKey: 'nav.btnEfficiency',
+		icon: 'dashboard',
+		iconColor: '#f472b6',
+		appearance: 'secondary'
+	}
+};
+
+/**
+ * Navigation button definitions used across all webview panels, wrapped in a Proxy so
+ * `label` is resolved via `localize()` on every property access instead of once at module
+ * load time. Resolving eagerly would freeze every label to whatever locale was active when
+ * this module was first evaluated (typically before `initializeWebviewLocalization()` runs),
+ * permanently locking the UI to the default English strings regardless of the active locale.
+ */
+export const BUTTONS: Record<ButtonId, ButtonConfig> = new Proxy({} as Record<ButtonId, ButtonConfig>, {
+	get(_target, prop): ButtonConfig | undefined {
+		const def = BUTTON_DEFS[prop as ButtonId];
+		if (!def) {
+			return undefined;
+		}
+		const { labelKey, ...rest } = def;
+		return { ...rest, label: localize(labelKey) };
+	}
+});
+
+/**
+ * Helper function to get button configuration by ID.
+ */
+export function getButton(id: ButtonId): ButtonConfig {
+	return BUTTONS[id];
+}
+
+/**
+ * Canonical order of the shared navigation button row rendered by every webview panel.
+ */
+const NAV_ORDER: ButtonId[] = [
+	'btn-refresh',
+	'btn-details',
+	'btn-chart',
+	'btn-usage',
+	'btn-maturity',
+	'btn-efficiency',
+	'btn-environmental',
+	'btn-diagnostics',
+	'btn-dashboard'
+];
+
+/**
+ * Returns the full navigation button row in the canonical order.
+ * The button matching `activeView` is marked active so it renders in a
+ * visually distinct, non-clickable state (the nav reads as a tab strip).
+ * The Team Dashboard button is only included when a backend is configured.
+ */
+export function getNavButtons(activeView: ButtonId | null, backendConfigured: boolean): ButtonConfig[] {
+	return NAV_ORDER
+		.filter(id => id !== 'btn-dashboard' || backendConfigured)
+		.map(id => ({ ...BUTTONS[id], active: id === activeView }));
+}
+
+/**
+ * Generates an HTML string for a vscode-button element from a button config
+ * (or a button ID). Useful for template strings where DOM manipulation isn't available.
+ */
+export function buttonHtml(idOrConfig: ButtonId | ButtonConfig): string {
+	const config = typeof idOrConfig === 'string' ? BUTTONS[idOrConfig] : idOrConfig;
+	if (config.hidden) { return ''; }
+	const appearance = config.appearance ? ` appearance="${config.appearance}"` : '';
+	const active = config.active ? ' class="nav-active" disabled aria-current="page"' : '';
+	const iconStyle = config.iconColor ? ` style="--icon-accent:${config.iconColor}"` : '';
+	// No trailing space after the icon span: vscode-button's own ::slotted(*) rule already
+	// adds a margin after it, so a literal space on top of that doubles the gap.
+	const icon = config.icon ? `<span class="codicon codicon-${config.icon} nav-icon"${iconStyle}></span>` : '';
+	return `<vscode-button id="${config.id}"${appearance}${active}>${icon}${config.label}</vscode-button>`;
+}
+
+/**
+ * Generates the HTML for the full shared navigation button row.
+ * String-template counterpart of `getNavButtons` + `createButton`.
+ */
+export function navButtonsHtml(activeView: ButtonId | null, backendConfigured: boolean): string {
+	return getNavButtons(activeView, backendConfigured).map(config => buttonHtml(config)).join('\n');
+}
