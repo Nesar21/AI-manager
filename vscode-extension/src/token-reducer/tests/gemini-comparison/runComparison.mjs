@@ -15,7 +15,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const API_KEY = 'AIzaSyBITdd5tvaVTPdU14prwjui5kAwj5C3frQ';
+const API_KEY = process.env.GEMINI_API_KEY || '';
 const MODEL   = 'gemini-2.0-flash';  // free tier
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${API_KEY}`;
 
@@ -128,6 +128,11 @@ function sleep(ms) {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
+  if (!API_KEY) {
+    console.error('Error: Please set the GEMINI_API_KEY environment variable.');
+    process.exit(1);
+  }
+
   console.log('═══════════════════════════════════════════════════════════');
   console.log('  Token Reducer — Gemini API Formatted vs Unformatted Test');
   console.log(`  Model : ${MODEL}`);
