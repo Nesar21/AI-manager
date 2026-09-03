@@ -556,7 +556,7 @@
     "cli": "cd cli && node dist/cli.js"
   },
   "devDependencies": {
-    "@github/copilot": "^1.0.81",
+    "@github/copilot": "^1.0.82",
     "@stryker-mutator/core": "^10.0.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^26.4.0",
