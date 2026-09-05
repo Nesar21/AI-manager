@@ -1,0 +1,28 @@
+name: Tag on New Issue
+
+on:
+  issues:
+    types: [opened]
+
+permissions: 
+    contents: read
+
+jobs:
+  tag-user:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Harden the runner (Audit all outbound calls)
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Tag user on new issue
+        uses: devops-actions/issue-comment-tag@3a605c5f21e15e5b963c866421bf4189bcc32310 # v0.1.10
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          team: ${{ vars.TAG_USER }}
+          issue: ${{ github.event.issue.number }}
+          owner: ${{ github.repository_owner }}
+          repo: ${{ github.repository }}

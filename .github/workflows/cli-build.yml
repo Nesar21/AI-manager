@@ -1,0 +1,113 @@
+name: CLI - Build & Validate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cli/**'
+      - 'src/**'
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      cli-relevant: ${{ github.event_name == 'push' || steps.filter.outputs.cli-relevant == 'true' }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check for CLI-relevant file changes
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        id: filter
+        with:
+          filters: |
+            cli-relevant:
+              - 'cli/**'
+              - 'src/**'
+
+  build-and-validate:
+    needs: check-changes
+    if: needs.check-changes.outputs.cli-relevant == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: '.nvmrc'
+
+      - name: Install extension dependencies
+        working-directory: vscode-extension
+        run: npm ci --ignore-scripts
+
+      - name: Install CLI dependencies
+        working-directory: cli
+        run: npm ci --ignore-scripts
+
+      - name: Build CLI
+        working-directory: cli
+        run: npm run build
+
+      - name: Validate CLI --help
+        working-directory: cli
+        run: node dist/cli.js --help
+
+      - name: Validate CLI --version
+        working-directory: cli
+        run: node dist/cli.js --version
+
+      - name: Validate stats command
+        working-directory: cli
+        run: node dist/cli.js stats --verbose
+
+      - name: Validate usage command
+        working-directory: cli
+        run: node dist/cli.js usage
+
+      - name: Validate environmental command
+        working-directory: cli
+        run: node dist/cli.js environmental
+
+      - name: Validate fluency command
+        working-directory: cli
+        run: node dist/cli.js fluency --tips
+
+      - name: Validate diagnostics command
+        working-directory: cli
+        run: node dist/cli.js diagnostics
+
+      - name: Validate chart command
+        working-directory: cli
+        run: node dist/cli.js chart --json
+
+      - name: Validate usage-analysis command
+        working-directory: cli
+        run: node dist/cli.js usage-analysis --json
+
+      - name: Validate all command (batched data for Visual Studio extension)
+        working-directory: cli
+        run: node dist/cli.js all --json
+
+      - name: Build production bundle
+        working-directory: cli
+        run: npm run build:production
+
+      - name: Verify production bundle runs
+        working-directory: cli
+        run: node dist/cli.js --help
